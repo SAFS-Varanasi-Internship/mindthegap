@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Tutorial: Prep the data for U-Net Models for gap filling &#8212; My sample book</title>
+    <title>Prep the data &#8212; My sample book</title>
   
   
   
@@ -182,7 +182,7 @@
             </li>
         </ul>
         <ul class="current nav bd-sidenav">
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Tutorial: Prep the data for U-Net Models for gap filling</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Prep the data</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notebooks.html">Content with notebooks</a></li>
 <li class="toctree-l1"><a class="reference internal" href="markdown-notebooks.html">Notebooks with MyST Markdown</a></li>
 </ul>
@@ -370,7 +370,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Tutorial: Prep the data for U-Net Models for gap filling</h1>
+    <h1>Prep the data</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -380,31 +380,27 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preprocessing">Data Preprocessing</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#load-the-dataset">1. Load the dataset</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#load-mindthegap-code">Load mindthegap code</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preprocessing">Data Preprocessing</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#load-the-dataset">1. Load the dataset</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#show-the-region">Show the region</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slice-and-subset">Slice and subset</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#process-data">2. Process data</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#function-data-preprocessing">Function: <code class="docutils literal notranslate"><span class="pre">data_preprocessing</span></code></a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#parameters">Parameters:</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#other-features-x">Other Features (X):</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#label-y">label (y):</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#standardization">Standardization:</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#show-the-region">Show the region</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slice-and-subset">Slice and subset</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#process-data">2. Process data</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#function-data-preprocessing">Function: <code class="docutils literal notranslate"><span class="pre">data_preprocessing</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#parameters">Parameters:</a></li>
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#other-features-x">Other Features (X):</a></li>
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#label-y">label (y):</a></li>
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#standardization">Standardization:</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#function-create-zarr">Function: <code class="docutils literal notranslate"><span class="pre">create_zarr</span></code></a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#split-the-data">Split the data</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#function-data-split">Function: <code class="docutils literal notranslate"><span class="pre">data_split</span></code></a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Parameters:</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#return">Return:</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#function-create-zarr">Function: <code class="docutils literal notranslate"><span class="pre">create_zarr</span></code></a></li>
 </ul>
 </li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#all-the-code-in-one-block">All the code in one block</a></li>
 </ul>
             </nav>
         </div>
@@ -416,76 +412,39 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="tutorial-prep-the-data-for-u-net-models-for-gap-filling">
-<h1>Tutorial: Prep the data for U-Net Models for gap filling<a class="headerlink" href="#tutorial-prep-the-data-for-u-net-models-for-gap-filling" title="Link to this heading">#</a></h1>
+  <section class="tex2jax_ignore mathjax_ignore" id="prep-the-data">
+<h1>Prep the data<a class="headerlink" href="#prep-the-data" title="Link to this heading">#</a></h1>
+<p>We need to subset, clean and standardize the data for the UNet model.</p>
+<p>Steps are:</p>
+<ul class="simple">
+<li><p>Load the raw data which has lat, lon, variable with gaps (in our case CHL) with gaps indicated with NaN, a land mask and any predictor variables.</p></li>
+<li><p>Subset to our smaller region.</p></li>
+<li><p>Add season variables (sin/cos)</p></li>
+<li><p>Add prior and next day CHL as extra predictors (in addition to the current day CHL)</p></li>
+<li><p>Create a fake clouds that will mask observed CHL</p></li>
+<li><p>Add masks for fake clouds (has an observed CHL), real clouds (does not have observed CHL), and valid CHL (observed CHL minus CHL covered with fake cloud).</p></li>
+</ul>
+<p>Scroll to bottom for the code to prep all in one code block.</p>
+<section id="load-mindthegap-code">
+<h2>Load mindthegap code<a class="headerlink" href="#load-mindthegap-code" title="Link to this heading">#</a></h2>
+<p>It is in the <code class="docutils literal notranslate"><span class="pre">mindthegap</span></code> folder in the root level of the repo.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">xarray</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">xr</span>
-<span class="n">zarr_ds</span> <span class="o">=</span> <span class="n">xr</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span>
-    <span class="s2">&quot;gcs://nmfs_odp_nwfsc/CB/mind_the_chl_gap/IO.zarr&quot;</span><span class="p">,</span>
-    <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;zarr&quot;</span><span class="p">,</span>
-    <span class="n">backend_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;storage_options&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;token&quot;</span><span class="p">:</span> <span class="s2">&quot;anon&quot;</span><span class="p">}},</span>
-    <span class="n">consolidated</span><span class="o">=</span><span class="kc">True</span>
-<span class="p">)</span>
-<span class="n">lat_min</span><span class="p">,</span> <span class="n">lat_max</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">31</span>
-<span class="n">lon_min</span><span class="p">,</span> <span class="n">lon_max</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span> <span class="mi">80</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ROOT_PATH</span> <span class="o">=</span> <span class="s2">&quot;/home/jovyan/ohw25_proj_gap/&quot;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span><span class="o">,</span><span class="w"> </span><span class="nn">os</span>
+<span class="n">repo_root</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getcwd</span><span class="p">(),</span> <span class="n">ROOT_PATH</span><span class="p">))</span>
+<span class="k">if</span> <span class="n">repo_root</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="p">:</span>
+    <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">repo_root</span><span class="p">)</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="n">zarr_ds</span> <span class="o">=</span> <span class="n">zarr_ds</span><span class="o">.</span><span class="n">sel</span><span class="p">(</span><span class="n">lat</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="n">lat_max</span><span class="p">,</span> <span class="n">lat_min</span><span class="p">),</span> <span class="n">lon</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="n">lon_min</span><span class="p">,</span><span class="n">lon_max</span><span class="p">))</span>  <span class="c1"># choose long and lat</span>
-
-<span class="c1"># create the zarr </span>
-<span class="n">features</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;sst&#39;</span><span class="p">]</span>
-<span class="n">train_year</span> <span class="o">=</span> <span class="mi">2015</span>
-<span class="n">train_range</span> <span class="o">=</span> <span class="mi">3</span>
-<span class="n">val_range</span> <span class="o">=</span> <span class="mi">1</span>
-<span class="n">test_range</span> <span class="o">=</span> <span class="mi">1</span>
-<span class="n">datadir</span> <span class="o">=</span> <span class="s2">&quot;/home/jovyan/shared-public/mindthegap/data&quot;</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="nn">mindthegap</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mtg</span>
-<span class="n">zarr_label</span> <span class="o">=</span> <span class="n">mtg</span><span class="o">.</span><span class="n">data_preprocessing</span><span class="p">(</span><span class="n">zarr_ds</span><span class="p">,</span> <span class="n">features</span><span class="p">,</span> <span class="n">train_year</span><span class="p">,</span> <span class="n">train_range</span><span class="p">,</span> <span class="n">zarr_tag</span><span class="o">=</span><span class="s2">&quot;ArabSea&quot;</span><span class="p">,</span> <span class="n">datadir</span><span class="o">=</span><span class="n">datadir</span><span class="p">)</span>
-<span class="n">zarr_label</span>
-</pre></div>
-</div>
-</div>
-<div class="cell_output docutils container">
-<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>label created
-raw data features added
-CHL logged
-sin and cos time calculated
-sin time added
-cos time added
-masked CHL added
-prev day CHL added
-next day CHL added
-land flag added
-real cloud flag added
-valid CHL flag added
-fake cloud flag added
-calculating mean and stdev...
-calculating mean and stdev...
-calculating mean and stdev...
-calculating mean and stdev...
-calculating mean and stdev...
-calculating mean and stdev...
-standardizing...
-standardizing...
-standardizing...
-standardizing...
-standardizing...
-standardizing...
-all standardized
-creating zarr
-</pre></div>
-</div>
-<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&#39;2015_3_ArabSea&#39;
+<span class="kn">import</span><span class="w"> </span><span class="nn">mindthegap</span>
 </pre></div>
 </div>
 </div>
 </div>
 <section id="data-preprocessing">
-<h2>Data Preprocessing<a class="headerlink" href="#data-preprocessing" title="Link to this heading">#</a></h2>
+<h3>Data Preprocessing<a class="headerlink" href="#data-preprocessing" title="Link to this heading">#</a></h3>
 <section id="load-the-dataset">
-<h3>1. Load the dataset<a class="headerlink" href="#load-the-dataset" title="Link to this heading">#</a></h3>
+<h4>1. Load the dataset<a class="headerlink" href="#load-the-dataset" title="Link to this heading">#</a></h4>
 <p>We start by loading the dataset of IO.zarr, slicing the region to the desired dimension, and removing days with no valid CHL data.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
@@ -512,7 +471,7 @@ creating zarr
 </section>
 </section>
 <section id="show-the-region">
-<h2>Show the region<a class="headerlink" href="#show-the-region" title="Link to this heading">#</a></h2>
+<h3>Show the region<a class="headerlink" href="#show-the-region" title="Link to this heading">#</a></h3>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
@@ -562,18 +521,15 @@ creating zarr
 </div>
 </section>
 <section id="slice-and-subset">
-<h2>Slice and subset<a class="headerlink" href="#slice-and-subset" title="Link to this heading">#</a></h2>
+<h3>Slice and subset<a class="headerlink" href="#slice-and-subset" title="Link to this heading">#</a></h3>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
 <div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-
 <span class="n">zarr_ds</span> <span class="o">=</span> <span class="n">zarr_ds</span><span class="o">.</span><span class="n">sel</span><span class="p">(</span><span class="n">lat</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="n">lat_max</span><span class="p">,</span> <span class="n">lat_min</span><span class="p">),</span> <span class="n">lon</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="n">lon_min</span><span class="p">,</span><span class="n">lon_max</span><span class="p">))</span>  <span class="c1"># choose long and lat</span>
 
 <span class="c1"># skip not needed</span>
 <span class="c1">#all_nan_CHL = np.isnan(zarr_ds[&#39;CHL_cmes-level3&#39;]).all(dim=[&quot;lon&quot;, &quot;lat&quot;]).compute()  # find sample indices where CHL is NaN</span>
-
 <span class="c1">#zarr_ds = zarr_ds.sel(time=(~all_nan_CHL))  # select samples with CHL not NaN</span>
-
 <span class="c1">#zarr_ds = zarr_ds.sortby(&#39;time&#39;)</span>
 </pre></div>
 </div>
@@ -1106,13 +1062,13 @@ Attributes: (12/92)
               dtype=&#x27;datetime64[ns]&#x27;, name=&#x27;time&#x27;, length=16071, freq=None))</pre></div></li></ul></div></li><li class='xr-section-item'><input id='section-60a277e3-ba32-46c4-b193-9fe4cc5f4b3c' class='xr-section-summary-in' type='checkbox'  ><label for='section-60a277e3-ba32-46c4-b193-9fe4cc5f4b3c' class='xr-section-summary' >Attributes: <span>(92)</span></label><div class='xr-section-inline-details'></div><div class='xr-section-details'><dl class='xr-attrs'><dt><span>Conventions :</span></dt><dd>CF-1.8, ACDD-1.3</dd><dt><span>DPM_reference :</span></dt><dd>GC-UD-ACRI-PUG</dd><dt><span>IODD_reference :</span></dt><dd>GC-UD-ACRI-PUG</dd><dt><span>acknowledgement :</span></dt><dd>The Licensees will ensure that original CMEMS products - or value added products or derivative works developed from CMEMS Products including publications and pictures - shall credit CMEMS by explicitly making mention of the originator (CMEMS) in the  following manner:  &lt;Generated using CMEMS Products, production centre ACRI-ST&gt;</dd><dt><span>citation :</span></dt><dd>The Licensees will ensure that original CMEMS products - or value added products or derivative works developed from CMEMS Products including publications and pictures - shall credit CMEMS by explicitly making mention of the originator (CMEMS) in the  following manner:  &lt;Generated using CMEMS Products, production centre ACRI-ST&gt;</dd><dt><span>cmems_product_id :</span></dt><dd>OCEANCOLOUR_GLO_BGC_L3_MY_009_103</dd><dt><span>cmems_production_unit :</span></dt><dd>OC-ACRI-NICE-FR</dd><dt><span>comment :</span></dt><dd>average</dd><dt><span>contact :</span></dt><dd>servicedesk.cmems@acri-st.fr</dd><dt><span>copernicusmarine_version :</span></dt><dd>1.3.1</dd><dt><span>creation_date :</span></dt><dd>2024-04-25 UTC</dd><dt><span>creation_time :</span></dt><dd>00:47:33 UTC</dd><dt><span>creator_email :</span></dt><dd>servicedesk.cmems@acri-st.fr</dd><dt><span>creator_name :</span></dt><dd>ACRI</dd><dt><span>creator_url :</span></dt><dd>http://marine.copernicus.eu</dd><dt><span>date_created :</span></dt><dd>2024-04-25T00:47:33Z</dd><dt><span>distribution_statement :</span></dt><dd>See CMEMS Data License</dd><dt><span>duration_time :</span></dt><dd>PT107179S</dd><dt><span>earth_radius :</span></dt><dd>6378.137</dd><dt><span>easternmost_longitude :</span></dt><dd>180.0</dd><dt><span>easternmost_valid_longitude :</span></dt><dd>180.00001525878906</dd><dt><span>file_quality_index :</span></dt><dd>0</dd><dt><span>geospatial_bounds :</span></dt><dd>POLYGON ((90.000000 -180.000000, 90.000000 180.000000, -90.000000 180.000000, -90.000000 -180.000000, 90.000000 -180.000000))</dd><dt><span>geospatial_bounds_crs :</span></dt><dd>EPSG:4326</dd><dt><span>geospatial_bounds_vertical_crs :</span></dt><dd>EPSG:5829</dd><dt><span>geospatial_lat_max :</span></dt><dd>89.97916412353516</dd><dt><span>geospatial_lat_min :</span></dt><dd>-89.97917175292969</dd><dt><span>geospatial_lon_max :</span></dt><dd>179.9791717529297</dd><dt><span>geospatial_lon_min :</span></dt><dd>-179.9791717529297</dd><dt><span>geospatial_vertical_max :</span></dt><dd>0</dd><dt><span>geospatial_vertical_min :</span></dt><dd>0</dd><dt><span>geospatial_vertical_positive :</span></dt><dd>up</dd><dt><span>grid_mapping :</span></dt><dd>Equirectangular</dd><dt><span>grid_resolution :</span></dt><dd>4.638312339782715</dd><dt><span>history :</span></dt><dd>Created using software developed at ACRI-ST</dd><dt><span>id :</span></dt><dd>20240417_cmems_obs-oc_glo_bgc-plankton_myint_l3-multi-4km_P1D</dd><dt><span>institution :</span></dt><dd>ACRI</dd><dt><span>keywords :</span></dt><dd>EARTH SCIENCE &gt; OCEANS &gt; OCEAN CHEMISTRY &gt; CHLOROPHYLL, EARTH SCIENCE &gt; BIOLOGICAL CLASSIFICATION &gt; PROTISTS &gt; PLANKTON &gt; PHYTOPLANKTON</dd><dt><span>keywords_vocabulary :</span></dt><dd>NASA Global Change Master Directory (GCMD) Science Keywords</dd><dt><span>lat_step :</span></dt><dd>0.0416666679084301</dd><dt><span>license :</span></dt><dd>See CMEMS Data License</dd><dt><span>lon_step :</span></dt><dd>0.0416666679084301</dd><dt><span>naming_authority :</span></dt><dd>CMEMS</dd><dt><span>nb_bins :</span></dt><dd>37324800</dd><dt><span>nb_equ_bins :</span></dt><dd>8640</dd><dt><span>nb_grid_bins :</span></dt><dd>37324800</dd><dt><span>nb_valid_bins :</span></dt><dd>9704694</dd><dt><span>netcdf_version_id :</span></dt><dd>4.3.3.1 of Jul  8 2016 18:15:50 $</dd><dt><span>northernmost_latitude :</span></dt><dd>90.0</dd><dt><span>northernmost_valid_latitude :</span></dt><dd>82.70833587646484</dd><dt><span>overall_quality :</span></dt><dd>mode=myint</dd><dt><span>parameter :</span></dt><dd>Chlorophyll-a concentration,Phytoplankton Functional Types</dd><dt><span>parameter_code :</span></dt><dd>CHL,DIATO,DINO,HAPTO,GREEN,PROKAR,PROCHLO,MICRO,NANO,PICO</dd><dt><span>pct_bins :</span></dt><dd>100.0</dd><dt><span>pct_valid_bins :</span></dt><dd>26.000659079218106</dd><dt><span>period_duration_day :</span></dt><dd>P1D</dd><dt><span>period_end_day :</span></dt><dd>20240417</dd><dt><span>period_start_day :</span></dt><dd>20240417</dd><dt><span>platform :</span></dt><dd>Aqua,Suomi-NPP,Sentinel-3a,JPSS-1 (NOAA-20),Sentinel-3b</dd><dt><span>processing_level :</span></dt><dd>L3</dd><dt><span>product_level :</span></dt><dd>3</dd><dt><span>product_name :</span></dt><dd>20240417_cmems_obs-oc_glo_bgc-plankton_myint_l3-multi-4km_P1D</dd><dt><span>product_type :</span></dt><dd>day</dd><dt><span>project :</span></dt><dd>CMEMS</dd><dt><span>publication :</span></dt><dd>Gohin, F., Druon, J. N., Lampert, L. (2002). A five channel chlorophyll concentration algorithm applied to SeaWiFS data processed by SeaDAS in coastal waters. International journal of remote sensing, 23(8), 1639-1661 + Hu, C., Lee, Z., Franz, B. (2012). Chlorophyll a algorithms for oligotrophic oceans: A novel approach based on three-band reflectance difference. Journal of Geophysical Research, 117(C1). doi: 10.1029/2011jc007395 + Xi H, Losa S N, Mangin A, Garnesson P, Bretagnon M, Demaria J, Soppa M A, Hembise Fanton d Andon O, Bracher A (2021) Global chlorophyll a concentrations of phytoplankton functional types with detailed uncertainty assessment using multi-sensor ocean color and sea surface temperature satellite products, JGR, in review.</dd><dt><span>publisher_email :</span></dt><dd>servicedesk.cmems@mercator-ocean.eu</dd><dt><span>publisher_name :</span></dt><dd>CMEMS</dd><dt><span>publisher_url :</span></dt><dd>http://marine.copernicus.eu</dd><dt><span>references :</span></dt><dd>http://www.globcolour.info GlobColour has been originally funded by ESA with data from ESA, NASA, NOAA and GeoEye. This version has received funding from the European Community s Seventh Framework Programme ([FP7/2007-2013]) under grant agreement n. 282723 [OSS2015 project].</dd><dt><span>registration :</span></dt><dd>5</dd><dt><span>sensor :</span></dt><dd>Moderate Resolution Imaging Spectroradiometer,Visible Infrared Imaging Radiometer Suite,Ocean and Land Colour Instrument</dd><dt><span>sensor_name :</span></dt><dd>MODISA,VIIRSN,OLCIa,VIIRSJ1,OLCIb</dd><dt><span>sensor_name_list :</span></dt><dd>MOD,VIR,OLA,VJ1,OLB</dd><dt><span>site_name :</span></dt><dd>GLO</dd><dt><span>software_name :</span></dt><dd>globcolour_l3_reproject</dd><dt><span>software_version :</span></dt><dd>2022.2</dd><dt><span>source :</span></dt><dd>surface observation</dd><dt><span>southernmost_latitude :</span></dt><dd>-90.0</dd><dt><span>southernmost_valid_latitude :</span></dt><dd>-66.33333587646484</dd><dt><span>standard_name_vocabulary :</span></dt><dd>NetCDF Climate and Forecast (CF) Metadata Convention</dd><dt><span>start_date :</span></dt><dd>2024-04-16 UTC</dd><dt><span>start_time :</span></dt><dd>21:12:05 UTC</dd><dt><span>stop_date :</span></dt><dd>2024-04-18 UTC</dd><dt><span>stop_time :</span></dt><dd>02:58:23 UTC</dd><dt><span>summary :</span></dt><dd>CMEMS product: cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D,  generated by ACRI-ST</dd><dt><span>time_coverage_duration :</span></dt><dd>PT107179S</dd><dt><span>time_coverage_end :</span></dt><dd>2024-04-18T02:58:23Z</dd><dt><span>time_coverage_resolution :</span></dt><dd>P1D</dd><dt><span>time_coverage_start :</span></dt><dd>2024-04-16T21:12:05Z</dd><dt><span>title :</span></dt><dd>cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D</dd><dt><span>westernmost_longitude :</span></dt><dd>-180.0</dd><dt><span>westernmost_valid_longitude :</span></dt><dd>-180.0</dd></dl></div></li></ul></div></div></div></div>
 </div>
 <section id="process-data">
-<h3>2. Process data<a class="headerlink" href="#process-data" title="Link to this heading">#</a></h3>
+<h4>2. Process data<a class="headerlink" href="#process-data" title="Link to this heading">#</a></h4>
 </section>
 <section id="function-data-preprocessing">
-<h3>Function: <code class="docutils literal notranslate"><span class="pre">data_preprocessing</span></code><a class="headerlink" href="#function-data-preprocessing" title="Link to this heading">#</a></h3>
+<h4>Function: <code class="docutils literal notranslate"><span class="pre">data_preprocessing</span></code><a class="headerlink" href="#function-data-preprocessing" title="Link to this heading">#</a></h4>
 <p>This function selects and standardizes feature variables, and store them to a zarr file for easy access in future training and evaluation.</p>
 <section id="parameters">
-<h4>Parameters:<a class="headerlink" href="#parameters" title="Link to this heading">#</a></h4>
+<h5>Parameters:<a class="headerlink" href="#parameters" title="Link to this heading">#</a></h5>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">zarr_ds</span></code>: original zarr dataset after region slicing and NaN CHL filtering</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">features</span></code>: a list of features available directly from <em>zarr_ds</em></p></li>
@@ -1121,7 +1077,7 @@ Attributes: (12/92)
 </ul>
 </section>
 <section id="other-features-x">
-<h4>Other Features (X):<a class="headerlink" href="#other-features-x" title="Link to this heading">#</a></h4>
+<h5>Other Features (X):<a class="headerlink" href="#other-features-x" title="Link to this heading">#</a></h5>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">sin_time</span></code>:
 <span class="math notranslate nohighlight">\(
@@ -1143,23 +1099,23 @@ for seasonal information as well</p></li>
 </ul>
 </section>
 <section id="label-y">
-<h4>label (y):<a class="headerlink" href="#label-y" title="Link to this heading">#</a></h4>
+<h5>label (y):<a class="headerlink" href="#label-y" title="Link to this heading">#</a></h5>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">CHL</span></code> (logged): observed CHL</p></li>
 </ul>
 </section>
 <section id="standardization">
-<h4>Standardization:<a class="headerlink" href="#standardization" title="Link to this heading">#</a></h4>
+<h5>Standardization:<a class="headerlink" href="#standardization" title="Link to this heading">#</a></h5>
 <p>First standardize based on train dataset, and then apply the calculated mean and standard deviation to all data. Only numerical features and the label are standardized. Mean and standard deviation of <em>CHL</em> and <em>masked_CHL</em> are stored in a <code class="docutils literal notranslate"><span class="pre">.npy</span></code> file for evaluation.</p>
 </section>
 </section>
 <section id="function-create-zarr">
-<h3>Function: <code class="docutils literal notranslate"><span class="pre">create_zarr</span></code><a class="headerlink" href="#function-create-zarr" title="Link to this heading">#</a></h3>
+<h4>Function: <code class="docutils literal notranslate"><span class="pre">create_zarr</span></code><a class="headerlink" href="#function-create-zarr" title="Link to this heading">#</a></h4>
 <p>This function creates a zarr file and stores standardized features and label to the zarr file.</p>
 <p><strong>Note</strong>: If you run the code for the first time (the <code class="docutils literal notranslate"><span class="pre">data_preprocessing</span></code> function creates the zarr file), it is recommended to restart the kernel and release the memory. Otherwise you might run out of memory during the trainning phase.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># create the zarr </span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># create the zarr file</span>
 <span class="n">features</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;sst&#39;</span><span class="p">]</span>
 <span class="n">train_year</span> <span class="o">=</span> <span class="mi">2015</span>
 <span class="n">train_range</span> <span class="o">=</span> <span class="mi">3</span>
@@ -1592,94 +1548,76 @@ Attributes:
 </div>
 </section>
 </section>
-<section id="split-the-data">
-<h2>Split the data<a class="headerlink" href="#split-the-data" title="Link to this heading">#</a></h2>
-<section id="function-data-split">
-<h3>Function: <code class="docutils literal notranslate"><span class="pre">data_split</span></code><a class="headerlink" href="#function-data-split" title="Link to this heading">#</a></h3>
-<p>This function selects the train, validation, and test data from the standardized data and splits the features and label.</p>
-<section id="id1">
-<h4>Parameters:<a class="headerlink" href="#id1" title="Link to this heading">#</a></h4>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">zarr_stdized</span></code>: Zarr file storing standardized features and label.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">train_year</span></code>: the first year of train data</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">train_range</span></code>: length of train data in year</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">val_range</span></code>: length of validation data in year</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">test_range</span></code>: length of test data in year</p></li>
-</ul>
 </section>
-<section id="return">
-<h4>Return:<a class="headerlink" href="#return" title="Link to this heading">#</a></h4>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">X_train,</span> <span class="pre">X_val,</span> <span class="pre">X_test</span></code>: the predictor variables of the train/validation/test data</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">y_train,</span> <span class="pre">y_val,</span> <span class="pre">y_test</span></code>: the response variables of the train/validation/test data</p></li>
-</ul>
+<section id="all-the-code-in-one-block">
+<h2>All the code in one block<a class="headerlink" href="#all-the-code-in-one-block" title="Link to this heading">#</a></h2>
+<p>Run this to create the smaller dataset for the model.</p>
 <div class="cell docutils container">
 <div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">data_split</span><span class="p">(</span><span class="n">zarr_stdized</span><span class="p">,</span> <span class="n">train_year</span><span class="p">,</span> <span class="n">train_range</span><span class="p">,</span> <span class="n">val_range</span><span class="p">,</span> <span class="n">test_range</span><span class="p">):</span>
-    <span class="n">X_vars</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">zarr_stdized</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
-    <span class="n">X_vars</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="s1">&#39;CHL&#39;</span><span class="p">)</span>
-    
-    <span class="n">zarr_train</span> <span class="o">=</span> <span class="n">zarr_stdized</span><span class="o">.</span><span class="n">sel</span><span class="p">(</span><span class="n">time</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">train_year</span><span class="si">}</span><span class="s1">-01-01&#39;</span><span class="p">,</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">train_year</span><span class="o">+</span><span class="n">train_range</span><span class="si">}</span><span class="s1">-01-01&#39;</span><span class="p">))</span>
-    <span class="n">X_train</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="n">X_vars</span><span class="p">:</span>
-        <span class="n">var</span> <span class="o">=</span> <span class="n">zarr_train</span><span class="p">[</span><span class="n">var</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-        <span class="n">X_train</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">var</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">var</span><span class="p">))</span>
-    <span class="n">y_train</span> <span class="o">=</span> <span class="n">zarr_train</span><span class="o">.</span><span class="n">CHL</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-    <span class="n">y_train</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">y_train</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">y_train</span><span class="p">)</span>
-    <span class="n">X_train</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">X_train</span><span class="p">)</span>
-    <span class="n">X_train</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">moveaxis</span><span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-    <span class="k">del</span> <span class="n">zarr_train</span>
-    
-    <span class="n">zarr_val</span> <span class="o">=</span> <span class="n">zarr_stdized</span><span class="o">.</span><span class="n">sel</span><span class="p">(</span><span class="n">time</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">train_year</span><span class="o">+</span><span class="n">train_range</span><span class="si">}</span><span class="s1">-01-01&#39;</span><span class="p">,</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">train_year</span><span class="o">+</span><span class="n">train_range</span><span class="o">+</span><span class="n">val_range</span><span class="si">}</span><span class="s1">-01-01&#39;</span><span class="p">))</span>
-    <span class="n">X_val</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="n">X_vars</span><span class="p">:</span>
-        <span class="n">var</span> <span class="o">=</span> <span class="n">zarr_val</span><span class="p">[</span><span class="n">var</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-        <span class="n">X_val</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">var</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">var</span><span class="p">))</span>
-    <span class="n">y_val</span> <span class="o">=</span> <span class="n">zarr_val</span><span class="o">.</span><span class="n">CHL</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-    <span class="n">y_val</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">y_val</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">y_val</span><span class="p">)</span>
-    <span class="n">X_val</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">X_val</span><span class="p">)</span>
-    <span class="n">X_val</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">moveaxis</span><span class="p">(</span><span class="n">X_val</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-    <span class="k">del</span> <span class="n">zarr_val</span>
-    
-    <span class="n">zarr_test</span> <span class="o">=</span> <span class="n">zarr_stdized</span><span class="o">.</span><span class="n">sel</span><span class="p">(</span><span class="n">time</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">train_year</span><span class="o">+</span><span class="n">train_range</span><span class="o">+</span><span class="n">val_range</span><span class="si">}</span><span class="s1">-01-01&#39;</span><span class="p">,</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">train_year</span><span class="o">+</span><span class="n">train_range</span><span class="o">+</span><span class="n">val_range</span><span class="o">+</span><span class="n">test_range</span><span class="si">}</span><span class="s1">-01-01&#39;</span><span class="p">))</span>
-    <span class="n">X_test</span><span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">var</span> <span class="ow">in</span> <span class="n">X_vars</span><span class="p">:</span>
-        <span class="n">var</span> <span class="o">=</span> <span class="n">zarr_test</span><span class="p">[</span><span class="n">var</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-        <span class="n">X_test</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">var</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">var</span><span class="p">))</span>
-    <span class="n">y_test</span> <span class="o">=</span> <span class="n">zarr_test</span><span class="o">.</span><span class="n">CHL</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-    <span class="n">y_test</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">y_test</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">y_test</span><span class="p">)</span>
-    <span class="n">X_test</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">X_test</span><span class="p">)</span>
-    <span class="n">X_test</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">moveaxis</span><span class="p">(</span><span class="n">X_test</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-    <span class="k">del</span> <span class="n">zarr_test</span><span class="p">,</span> <span class="n">var</span>
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># Get the full data set</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">xarray</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">xr</span>
+<span class="n">zarr_ds</span> <span class="o">=</span> <span class="n">xr</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span>
+    <span class="s2">&quot;gcs://nmfs_odp_nwfsc/CB/mind_the_chl_gap/IO.zarr&quot;</span><span class="p">,</span>
+    <span class="n">engine</span><span class="o">=</span><span class="s2">&quot;zarr&quot;</span><span class="p">,</span>
+    <span class="n">backend_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;storage_options&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;token&quot;</span><span class="p">:</span> <span class="s2">&quot;anon&quot;</span><span class="p">}},</span>
+    <span class="n">consolidated</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+<span class="c1"># Specify the smaller region and subset</span>
+<span class="n">lat_min</span><span class="p">,</span> <span class="n">lat_max</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">31</span>
+<span class="n">lon_min</span><span class="p">,</span> <span class="n">lon_max</span> <span class="o">=</span> <span class="mi">42</span><span class="p">,</span> <span class="mi">80</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="n">zarr_ds</span> <span class="o">=</span> <span class="n">zarr_ds</span><span class="o">.</span><span class="n">sel</span><span class="p">(</span><span class="n">lat</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="n">lat_max</span><span class="p">,</span> <span class="n">lat_min</span><span class="p">),</span> <span class="n">lon</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="n">lon_min</span><span class="p">,</span><span class="n">lon_max</span><span class="p">))</span>  <span class="c1"># choose long and lat</span>
 
-    <span class="k">return</span> <span class="p">(</span><span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">,</span> 
-            <span class="n">X_val</span><span class="p">,</span> <span class="n">y_val</span><span class="p">,</span>
-            <span class="n">X_test</span><span class="p">,</span> <span class="n">y_test</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-</div>
-<div class="cell docutils container">
-<div class="cell_input docutils container">
-<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">xarray</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">xr</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">zarr</span>
-<span class="n">datadir</span> <span class="o">=</span> <span class="s2">&quot;/home/jovyan/shared-public/mindthegap/data&quot;</span>
-<span class="n">zarr_label</span><span class="o">=</span><span class="s2">&quot;2015_3_ArabSea&quot;</span>
-<span class="n">zarr_stdized</span> <span class="o">=</span> <span class="n">xr</span><span class="o">.</span><span class="n">open_zarr</span><span class="p">(</span><span class="n">zarr</span><span class="o">.</span><span class="n">DirectoryStore</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">datadir</span><span class="si">}</span><span class="s1">/</span><span class="si">{</span><span class="n">zarr_label</span><span class="si">}</span><span class="s1">.zarr&#39;</span><span class="p">))</span>
-
-<span class="c1"># create train and test data</span>
+<span class="c1"># create the zarr. Spec the years to use and features</span>
 <span class="n">features</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;sst&#39;</span><span class="p">]</span>
 <span class="n">train_year</span> <span class="o">=</span> <span class="mi">2015</span>
 <span class="n">train_range</span> <span class="o">=</span> <span class="mi">3</span>
 <span class="n">val_range</span> <span class="o">=</span> <span class="mi">1</span>
 <span class="n">test_range</span> <span class="o">=</span> <span class="mi">1</span>
-<span class="n">X_train</span><span class="p">,</span> <span class="n">y_train</span><span class="p">,</span> <span class="n">X_val</span><span class="p">,</span> <span class="n">y_val</span><span class="p">,</span> <span class="n">X_test</span><span class="p">,</span> <span class="n">y_test</span> <span class="o">=</span> <span class="n">data_split</span><span class="p">(</span><span class="n">zarr_stdized</span><span class="p">,</span> <span class="n">train_year</span><span class="p">,</span> <span class="n">train_range</span><span class="p">,</span> <span class="n">val_range</span><span class="p">,</span> <span class="n">test_range</span><span class="p">)</span>
+<span class="n">datadir</span> <span class="o">=</span> <span class="s2">&quot;/home/jovyan/shared-public/mindthegap/data&quot;</span>
+
+<span class="c1"># functions are in mindthegap</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">mindthegap</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mtg</span>
+<span class="n">zarr_label</span> <span class="o">=</span> <span class="n">mtg</span><span class="o">.</span><span class="n">data_preprocessing</span><span class="p">(</span><span class="n">zarr_ds</span><span class="p">,</span> <span class="n">features</span><span class="p">,</span> <span class="n">train_year</span><span class="p">,</span> <span class="n">train_range</span><span class="p">,</span> <span class="n">zarr_tag</span><span class="o">=</span><span class="s2">&quot;ArabSea&quot;</span><span class="p">,</span> <span class="n">datadir</span><span class="o">=</span><span class="n">datadir</span><span class="p">)</span>
+<span class="n">zarr_label</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>label created
+raw data features added
+CHL logged
+sin and cos time calculated
+sin time added
+cos time added
+masked CHL added
+prev day CHL added
+next day CHL added
+land flag added
+real cloud flag added
+valid CHL flag added
+fake cloud flag added
+calculating mean and stdev...
+calculating mean and stdev...
+calculating mean and stdev...
+calculating mean and stdev...
+calculating mean and stdev...
+calculating mean and stdev...
+standardizing...
+standardizing...
+standardizing...
+standardizing...
+standardizing...
+standardizing...
+all standardized
+creating zarr
+</pre></div>
+</div>
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre><span></span>&#39;2015_3_ArabSea&#39;
 </pre></div>
 </div>
 </div>
 </div>
-</section>
-</section>
 </section>
 </section>
 
@@ -1747,31 +1685,27 @@ Attributes:
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preprocessing">Data Preprocessing</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#load-the-dataset">1. Load the dataset</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#load-mindthegap-code">Load mindthegap code</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preprocessing">Data Preprocessing</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#load-the-dataset">1. Load the dataset</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#show-the-region">Show the region</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slice-and-subset">Slice and subset</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#process-data">2. Process data</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#function-data-preprocessing">Function: <code class="docutils literal notranslate"><span class="pre">data_preprocessing</span></code></a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#parameters">Parameters:</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#other-features-x">Other Features (X):</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#label-y">label (y):</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#standardization">Standardization:</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#show-the-region">Show the region</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slice-and-subset">Slice and subset</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#process-data">2. Process data</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#function-data-preprocessing">Function: <code class="docutils literal notranslate"><span class="pre">data_preprocessing</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#parameters">Parameters:</a></li>
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#other-features-x">Other Features (X):</a></li>
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#label-y">label (y):</a></li>
+<li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#standardization">Standardization:</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#function-create-zarr">Function: <code class="docutils literal notranslate"><span class="pre">create_zarr</span></code></a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#split-the-data">Split the data</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#function-data-split">Function: <code class="docutils literal notranslate"><span class="pre">data_split</span></code></a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Parameters:</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#return">Return:</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#function-create-zarr">Function: <code class="docutils literal notranslate"><span class="pre">create_zarr</span></code></a></li>
 </ul>
 </li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#all-the-code-in-one-block">All the code in one block</a></li>
 </ul>
   </nav></div>
 
