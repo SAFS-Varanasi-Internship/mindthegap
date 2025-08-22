@@ -7,7 +7,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Index &#8212; My sample book</title>
+    <title>Index &#8212; UNet gap-filling</title>
   
   
   
@@ -152,8 +152,8 @@
       
     
     
-    <img src="_static/logo.png" class="logo__image only-light" alt="My sample book - Home"/>
-    <script>document.write(`<img src="_static/logo.png" class="logo__image only-dark" alt="My sample book - Home"/>`);</script>
+    <img src="_static/logo.jpg" class="logo__image only-light" alt="UNet gap-filling - Home"/>
+    <script>document.write(`<img src="_static/logo.jpg" class="logo__image only-dark" alt="UNet gap-filling - Home"/>`);</script>
   
   
 </a></div>
@@ -174,14 +174,19 @@
         <ul class="nav bd-sidenav bd-sidenav__home-link">
             <li class="toctree-l1">
                 <a class="reference internal" href="intro.html">
-                    Welcome to your Jupyter Book
+                    gap-filling gridded data
                 </a>
             </li>
         </ul>
         <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="U-Net_Data_Prep.html">Prep the data</a></li>
-<li class="toctree-l1"><a class="reference internal" href="notebooks.html">Content with notebooks</a></li>
-<li class="toctree-l1"><a class="reference internal" href="markdown-notebooks.html">Notebooks with MyST Markdown</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="unet.html">What is U-Net?</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="0-U-Net_Modules.html">Modules used</a></li>
+<li class="toctree-l2"><a class="reference internal" href="1-U-Net_Data_Prep.html">Prep the data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="2-U-Net_Fit.html">Training the U-Net Models for gap filling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="3-U-Net_Viz.html">Vizualizing the predictions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="dincae.html">What is DINCAE?</a></li>
 </ul>
 
     </div>
@@ -365,7 +370,7 @@ document.write(`
   <div class="footer-item">
     
 <p class="component-author">
-By The Jupyter Book Community
+By Yifei Hang (original) and adapted by OHW25 and GeoSmart24
 </p>
 
   </div>
