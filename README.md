@@ -1,6 +1,6 @@
 # Mind the CHL Gap
 
-Create a tutorial on gap-free Indian Ocean gridded data with U-Net method
+Create a tutorial on gap-free Indian Ocean gridded data with U-Net method. This will build on work started during GeoHackWeek 2024. We will try to get a tutorial for U-Net gap filling working and add to https://ocean-satellite-tools.github.io/mind-the-chl-gap/intro.html
 
 
 The basic approach is the following:
