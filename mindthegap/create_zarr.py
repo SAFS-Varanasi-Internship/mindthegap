@@ -108,7 +108,7 @@ def create_zarr(
 
     # Write Zarr (same behavior, only path is configurable now)
     store_path = datadir / f"{zarr_label}.zarr"
-    ds_out.to_zarr(store_path.as_posix(), mode="w", consolidated=True)
+    ds_out.to_zarr(store_path.as_posix(), mode="w", consolidated=True, zarr_format=2)
 
     return store_path.as_posix()
 
