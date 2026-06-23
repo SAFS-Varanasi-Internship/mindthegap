@@ -3,3 +3,4 @@ mindthegap/.ipynb_checkpoints/*
 .python-version
 *checkpoint.ipynb
 mindthegap/__pycache__
+data/
