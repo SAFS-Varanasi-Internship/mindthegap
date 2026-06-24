@@ -22,7 +22,7 @@ import mindthegap as mtg
 | Name                | Role                |
 |---------------------|---------------------|
 | [Eli Holmes](https://github.com/eeholmes)      | Project Facilitator |
-| [Troy Russon](https://github.com/troyrusso)       | 2026 Varanasi Intern         |
+| [Troy Russo](https://github.com/troyrusso)       | 2026 Varanasi Intern         |
 | [Kaira Nair](https://github.com/kai-110)       | Participant         |
 
 ## Background
