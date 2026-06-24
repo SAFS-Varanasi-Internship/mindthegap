@@ -1,18 +1,18 @@
 # Mind the Gap
 
-This builds on work started during GeoHackWeek 2024 and OceanHackWeek 2025 ([proj_gap](https://github.com/oceanhackweek/ohw25_proj_gap)). We will try to get a tutorial for U-Net gap-filling working and add to https://ocean-satellite-tools.github.io/mind-the-chl-gap/intro.html. We also hope to get other algorithms working (DINCAE and DINEOF) or at least describe them.
-
+This builds on work started during GeoHackWeek 2024 and OceanHackWeek 2025 ([proj_gap](https://github.com/oceanhackweek/ohw25_proj_gap)). The summer goal is to create a proof of concept for training global gap-filling models for single-variable ocean color data (e.g. chl) and for multi-variable data (e.g. multiple spectra) as a stretch goal. Similar in concept to https://github.com/EhsanMehdipour/PFT_gapfilling.  The main model (currently) is a U-Net model developed by our interns in 2024/25, but we also hope to explore other gap-filling algorithms working (DINCAE and DINEOF) or at least describe them.
 
 The basic approach is the following:
 ```mermaid
 graph LR
-  A[netcdf/Zarr w time, lat, lon] --> G{to xarray}
+  A[netcdf/Zarr/VirtualiZarr w time, lat, lon] --> G{to xarray?}
   G --> C[standardized Zarr w masks and season]
   C --> D{CNN or UNet model}
   D --> E[Predict: xarray with gaps filled]
+  E --> F[Gap-filled Zarr]
 ```
 
-Functions are in `mindthegap` directory.
+Functions are in `mindthegap` directory. Notebooks are in the `book` directory.
 ```
 import mindthegap as mtg
 ```
@@ -28,10 +28,6 @@ import mindthegap as mtg
 ## Background
 
 Gaps in ocean color remote sensing data limits use of these data and gap-filled products are needed. However it would be most convenient to be able to gap-fill arbitrary products (or dates) and to gap-fill multivariate products.
-
-## Goals
-
-Create a proof of concept for training global gap-filling models for single-variable ocean color data (e.g. chl) and multi-variable data (e.g. multiple spectra) as a stretch goal. Similar in concept to https://github.com/EhsanMehdipour/PFT_gapfilling.
 
 **Issues**
 
