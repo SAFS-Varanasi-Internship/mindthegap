@@ -1,6 +1,6 @@
-# Mind the CHL Gap
+# Mind the Gap
 
-Create a tutorial on gap-free Indian Ocean gridded data with CNNs. This will build on work started during GeoHackWeek 2024. We will try to get a tutorial for U-Net gap-filling working and add to https://ocean-satellite-tools.github.io/mind-the-chl-gap/intro.html. We also hope to get other algorithms working (DINCAE and DINEOF) or at least describe them.
+This builds on work started during GeoHackWeek 2024 and OceanHackWeek 2025 ([proj_gap](https://github.com/oceanhackweek/ohw25_proj_gap)). We will try to get a tutorial for U-Net gap-filling working and add to https://ocean-satellite-tools.github.io/mind-the-chl-gap/intro.html. We also hope to get other algorithms working (DINCAE and DINEOF) or at least describe them.
 
 
 The basic approach is the following:
@@ -22,26 +22,21 @@ import mindthegap as mtg
 | Name                | Role                |
 |---------------------|---------------------|
 | [Eli Holmes](https://github.com/eeholmes)      | Project Facilitator |
-| [Bruna Cândido](https://github.com/brunacandido)       | Fellow         |
-| [Trina Xavier](https://github.com/trinaxavier2001)       | Participant         |
-| [Lilac Hong](https://github.com/LilacHo) | Participant |
-
-
-
-## Planning
-
-* Initial idea: Create a tutorial on gap-free Indian Ocean gridded data with U-Net method
-* [Pitch slide](https://docs.google.com/presentation/d/14JyNPC2JicP1IkHbWcDI0xt0FRbDmtdW4NTQo8wN80M/edit?slide=id.g37b3811c38a_11_5#slide=id.g37b3811c38a_11_5)
-* Slack channel: ohw25_proj_gap
-* repo: [https://github.com/oceanhackweek/ohw25_proj_gap](https://github.com/oceanhackweek/ohw25_proj_gap)
-* [Final presentation](https://gamma.app/docs/Daily-Gap-Filled-Chlorophyll-a-Datasets-Using-Deep-Neural-Network-ozsc5xmxri96od1?mode=doc)
+| [Troy Russon](https://github.com/troyrusso)       | 2026 Varanasi Intern         |
+| [Kaira Nair](https://github.com/kai-110)       | Participant         |
 
 ## Background
-Chlorophyll is a widely used indicator of plankton abundance, and thus a key measure of marine productivity and ecosystem health, since the ocean covers nearly 70% of Earth’s surface. Estimating chlorophyll concentrations allows researchers to assess phytoplankton biomass, which supports oceanic food webs and contributes to global carbon cycling. Remote sensing with ocean-color instruments enables large-scale monitoring of chlorophyll-a by detecting the light reflectance of plankton. However, cloud cover continues to be a significant challenge, obstructing surface observations and creating gaps in chlorophyll-a data. These gaps limit our ability to monitor marine productivity accurately and to quantify the contribution of plankton to the global carbon cycle.
+
+Gaps in ocean color remote sensing data limits use of these data and gap-filled products are needed. However it would be most convenient to be able to gap-fill arbitrary products (or dates) and to gap-fill multivariate products.
 
 ## Goals
-Contribute to ["mind-the-chl-gap" project](https://github.com/ocean-satellite-tools/mind-the-chl-gap/tree/main) and the create a tutorial on gap-free Indian Ocean gridded data with U-Net method.
-For OceanHackWeek 2025, we aimed to extend the existing work by exploring different types of CNN architectures and experimenting with alternative gap-filling tools, such as [segmentation_models_pytorch](https://github.com/qubvel-org/segmentation_models.pytorch), [DINCAE](https://github.com/gher-uliege/DINCAE.jl/tree/main).
+
+Create a proof of concept for training global gap-filling models for single-variable ocean color data (e.g. chl) and multi-variable data (e.g. multiple spectra) as a stretch goal. Similar in concept to https://github.com/EhsanMehdipour/PFT_gapfilling.
+
+**Issues**
+
+* One issue has been fragile workflows. Code/notebooks that work now don't work later. We find this both for our own code and for code of others that we have tried to apply. How do we create a more robust gap-filling approach?
+* Another issue is how to develop a global model that is not trained on the whole globe since what works in Indian Ocean is not tuned for Eastern Pacific Ocean.
 
 
 ## Datasets
@@ -65,10 +60,7 @@ flowchart TD
     C --> D[Result Visualization]
 ```
 
-## Results/Findings
-[oceanhackweek.org/ohw25_proj_gap/](oceanhackweek.org/ohw25_proj_gap/)
-
-## Lessons Learned
+## Lessons Learned from OHW25
 * Working with outdated packages can be quite challenging.
 * Existing frameworks (e.g., DINCAE) can serve as inspiration but need to be adapted to the specific context.
 * Pay attention to memory efficiency — document how much memory is required to run your code and data.
