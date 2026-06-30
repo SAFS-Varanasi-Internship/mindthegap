@@ -207,3 +207,100 @@ def compute_mse(y_true, y_pred):
     """
     mask = ~np.isnan(y_true) & ~np.isnan(y_pred)
     return np.mean((y_true[mask] - y_pred[mask]) ** 2)
+
+import numpy as np
+
+def make_tf_gen(batcher, x_vars, y_mean, y_std, feature_stats):
+    """
+    Creates a generator function for TensorFlow `tf.data.Dataset.from_generator`.
+    
+    This factory function iterates through an xbatcher dataset, applies synthetic 
+    cloud masking, standardizes variables (log-transforming Chlorophyll), and 
+    constructs the input features (X) and target labels (y) for a neural network.
+    
+    Args:
+        batcher (xbatcher.BatchGenerator): An iterable xbatcher object containing 
+            chunked xarray datasets.
+        x_vars (list of str): List of feature names to extract and stack into 
+            the final input tensor. Accepts dataset variables and special keywords:
+            'masked_CHL', 'fake_cloud_flag', 'sin_time', and 'cos_time'.
+        y_mean (float): The mean of the log-transformed target variable (for standardization).
+        y_std (float): The standard deviation of the log-transformed target variable.
+        feature_stats (dict): Dictionary containing the mean and standard deviation 
+            for standardizing other input variables. Format: {'var_name': (mean, std)}.
+            
+    Returns:
+        callable: A generator function `gen()` that yields tuples of (x, y) 
+        where `x` is the input tensor and `y` is the target tensor.
+    """
+    def gen():
+        for batch in batcher:
+            time_len = batch.sizes["time"]
+            for t in range(time_len):
+                
+                # --- 1. Synthetic Cloud Masking ---
+                # Shift the cloud mask by 10 days to create "fake" clouds that 
+                # do not perfectly correlate with the true missing data.
+                fake_t = (t + 10) % time_len 
+                fake_cloud_flag = batch['CHL_cmes-cloud'].isel(time=fake_t).values
+                # Replace any NaN flags with 0.0 (no cloud)
+                fake_cloud_flag = np.where(np.isnan(fake_cloud_flag), 0.0, fake_cloud_flag)
+
+                # --- 2. Target Variable (True CHL) Preparation ---
+                raw_true_chl = batch['CHL_cmes-gapfree'].isel(time=t).values
+                
+                # Suppress warnings for log(0) or log(NaN) temporarily
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    log_true_chl = np.log(raw_true_chl)
+                    
+                # Standardize the log-transformed true CHL using injected params
+                true_chl_std = (log_true_chl - y_mean) / y_std
+                true_chl_std = np.where(np.isnan(true_chl_std), 0.0, true_chl_std)
+                true_chl_std = np.where(np.isinf(true_chl_std), 0.0, true_chl_std)
+                
+                # Apply the synthetic cloud mask to create the input CHL feature
+                masked_chl = np.where(fake_cloud_flag == 1, 0.0, true_chl_std)
+
+                # --- 3. Cyclical Time Encoding ---
+                # Convert the day of the year into continuous circular features 
+                # so the model understands that Dec 31st and Jan 1st are adjacent.
+                day_of_year = batch['time'].isel(time=t).dt.dayofyear.item()
+                sin_grid = np.full(raw_true_chl.shape, np.sin(2 * np.pi * day_of_year / 365), dtype=np.float32)
+                cos_grid = np.full(raw_true_chl.shape, np.cos(2 * np.pi * day_of_year / 365), dtype=np.float32)
+
+                # --- 4. Input Tensor Assembly ---
+                x_slice = []
+                for var in x_vars:
+                    # Handle computed/special variables
+                    if var == 'masked_CHL':
+                        x_slice.append(masked_chl)
+                    elif var == 'fake_cloud_flag':
+                        x_slice.append(fake_cloud_flag)
+                    elif var == 'sin_time':
+                        x_slice.append(sin_grid)
+                    elif var == 'cos_time':
+                        x_slice.append(cos_grid)
+                    
+                    # Handle standard dataset variables
+                    else:
+                        # Extract raw values and fill NaNs with 0.0
+                        raw_val = np.where(np.isnan(batch[var].isel(time=t).values), 0.0, batch[var].isel(time=t).values)
+                        
+                        # Standardize using the injected feature_stats if available
+                        if var in feature_stats:
+                            final_val = (raw_val - feature_stats[var][0]) / feature_stats[var][1]
+                        else:
+                            final_val = raw_val
+                            
+                        x_slice.append(final_val)
+
+                # --- 5. Yielding Batch ---
+                # Stack all feature arrays along the last dimension (channels)
+                x = np.stack(x_slice, axis=-1).astype(np.float32)
+                
+                # Expand dimensions of y to match expected shape (..., 1)
+                y = true_chl_std.astype(np.float32)[..., np.newaxis]
+                
+                yield x, y
+                
+    return gen
