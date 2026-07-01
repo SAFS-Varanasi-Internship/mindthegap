@@ -5,7 +5,7 @@ decisions. Goal: explore moving the U-Net gap-filler from a single region (Arab 
 `IO.zarr`) to a much larger or global area using PACE OCI Level-3 `chlor_a`, batching across
 time and space.
 
-Most of the "facts" below are read off the PACE material shared with us; citations point back
+Most of the facts below are read off the PACE material; citations point back
 to the source so we can double check them with the data scientists. See the Sources list at the
 bottom.
 
