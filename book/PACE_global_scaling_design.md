@@ -1,70 +1,79 @@
-# Scaling gap-fill to global PACE OCI — design notes
+# Scaling gap-fill to global PACE OCI, discussion notes
 
-Working doc for the eScience meeting. Goal: move the U-Net gap-filler from a single
-region (Arab Sea, CMEMS `IO.zarr`) to a **much larger / global** area using **PACE OCI
-Level-3 `chlor_a`**, batching across **time _and_ space**.
+Working doc for the eScience meeting. These are proposals and open questions, not settled
+decisions. Goal: explore moving the U-Net gap-filler from a single region (Arab Sea, CMEMS
+`IO.zarr`) to a much larger or global area using PACE OCI Level-3 `chlor_a`, batching across
+time and space.
 
-## TL;DR of what changes
+Most of the "facts" below are read off the PACE material shared with us; citations point back
+to the source so we can double check them with the data scientists. See the Sources list at the
+bottom.
 
-| | Arab Sea `IO.zarr` (current) | Global PACE OCI (target) |
+## What seems to change (for discussion)
+
+| Aspect | Arab Sea `IO.zarr` (current) | Global PACE OCI (target) |
 |---|---|---|
-| Extent | 1 region, 104×152 | Global 1800×3600 (0p1deg) or ~4320×8640 (4km) |
-| Batching | full domain per day, stream over **time** | must tile over **time × lat × lon** |
-| Ground truth | CMEMS **L4 gapfree** exists → supervised | **No L4.** Only gappy L3 `chlor_a` → self-supervised |
-| Gaps | clouds (blobby) | **orbital swath bands** + clouds (banded missingness) |
-| Predictors | sst, so, winds, air_temp, prev/next CHL, flags | `chlor_a` only (unless we join SST/RRS) |
-| Location | fixed region, no positional input | global → **latitude/longitude must be inputs** |
-| Access | public GCS zarr, anywhere | **Icechunk, in-region us-west-2 + earthaccess auth** |
-| Chunking | `time=100, lat/lon=full` (clean) | `time=1`, `lat=16 or 512`, `lon=1024` — **two schemes to reconcile** |
+| Extent | 1 region, 104x152 | Global 1800x3600 at 0p1deg [S1] |
+| Batching | full domain per day, stream over time | probably need to tile over time, lat, lon |
+| Ground truth | CMEMS L4 gapfree exists, so supervised | no L4 gapfree in this store, only gappy L3 `chlor_a` [S2] |
+| Gaps | clouds (blobby) | banded (orbital swaths) plus clouds [S3] |
+| Predictors | sst, so, winds, air_temp, prev/next CHL, flags | `chlor_a` only in this store [S2] |
+| Location | fixed region, no positional input | global, so lat/lon may need to be inputs |
+| Access | public GCS zarr, anywhere | Icechunk, appears to need in-region us-west-2 plus earthaccess auth [S4] |
+| Chunking | `time=100, lat/lon=full` (from our diagnostic) [S5] | `time=1`, `lat=16 or 512`, `lon=1024`, two schemes [S1][S6] |
 
-The three hard problems below are what we should spend the meeting on.
+The three areas below are where we think the meeting time is best spent. We are not confident
+on any of them yet; each ends with what we would want to ask.
 
----
+## Area 1: spatial plus temporal tiling (and chunk alignment)
 
-## Problem 1 — Spatial + temporal tiling (and chunk alignment)
-
-The model is a *local* gap-filler; we can't and shouldn't push a global 1800×3600 frame
-through the U-Net. We tile space into patches and stream over `(time × lat-tile × lon-tile)`.
-
-xbatcher already supports this — it's the same `BatchGenerator`, just with spatial dims in
-`input_dims`:
+The model is a local gap-filler, so pushing a full global 1800x3600 frame through the U-Net is
+probably not the right approach. A natural option is to tile space into patches and stream over
+`(time, lat-tile, lon-tile)`. xbatcher can already do this by adding spatial dims to `input_dims`:
 
 ```python
 input_dims    = {"time": 1, "lat": 128, "lon": 128}
-input_overlap = {"lat": 32, "lon": 32}   # halo for context + seamless re-stitching
+input_overlap = {"lat": 32, "lon": 32}   # halo for context and re-stitching
 bgen = BatchGenerator(ds_std, input_dims=input_dims, input_overlap=input_overlap)
 ```
 
-**Our pass-through `make_tf_gen` already generalizes to this** — each xbatcher block is now a
-`(1, 128, 128)` tile instead of a full frame, `batch.sizes["time"] == 1`, and it yields one
-`(128, 128, C)` sample. Two additions needed (below): tile filtering and a masked target.
+We think our pass-through `make_tf_gen` mostly generalizes to this: each block becomes a
+`(1, 128, 128)` tile, so `batch.sizes["time"] == 1` and it yields one `(128, 128, C)` sample. The
+tile size of 128 is a guess and should be tuned.
 
-**Chunk alignment (straight from our earlier lesson — don't hardcode, read the real chunks):**
-- PACE daily `chlor_a` is `time=1` chunked (one day per chunk) — good, per-day reads are clean.
-- BUT lat is chunked `16` (post-2026-02 subgroup) or `512` (pre) and lon `1024`. A 128×128
-  tile crosses **8 lat-chunks** in the `16` scheme and lon-chunk boundaries → read amplification.
-- The two subgroups (`chunks_16`, `chunks_512`) must be `concat`+`sortby('time')`, which leaves
-  **inconsistent chunking along time**. For ML tiling we almost certainly want to **rechunk to a
-  uniform tile-friendly scheme once** (e.g. `{time:1, lat:128, lon:128}`), possibly persisting a
-  training-subset zarr. → *Open question for eScience: best practice here.*
+Chunk alignment looks like it matters more here than it did for `IO.zarr`:
+- PACE daily `chlor_a` appears to be `time=1` chunked (one day per chunk), which is convenient for
+  per-day reads [S1][S6].
+- lat is chunked at 16 (post 2026-02 subgroup) or 512 (pre), and lon at 1024 [S1]. If that is
+  right, a 128x128 tile would cross several lat chunks in the `16` scheme and cross lon-chunk
+  boundaries, which could amplify reads.
+- The two subgroups (`chunks_16`, `chunks_512`) have to be concatenated and sorted by time [S6],
+  which would leave inconsistent chunking along time. We suspect we want to rechunk to a uniform,
+  tile-friendly scheme once (for example `{time:1, lat:128, lon:128}`), and possibly persist a
+  training-subset zarr, but this is exactly the kind of thing to confirm with them.
 
-## Problem 2 — No L4 truth → self-supervised masked reconstruction
+Questions: is rechunking to a uniform ML grid the right move, or is there a better pattern for
+tiled reads directly off the virtual store? How should we handle the `chunks_16` vs `chunks_512`
+seam? What tile size and overlap do they usually use?
 
-This is the big one. The Arab Sea pipeline "cheated": CMEMS gives a gapfree **L4** product we
-trained toward. **PACE L3M has no gapfree product** — only the gappy `chlor_a`. So we can't
+## Area 2: no L4 truth, so likely self-supervised masked reconstruction
+
+This may be the most important thing to get their read on. The Arab Sea pipeline had it easy:
+CMEMS provides a gapfree L4 product we trained toward. As far as we can tell, PACE L3M CHL has no
+gapfree product in this store, only the gappy `chlor_a` [S2]. If that is correct, we cannot
 supervise against a complete field.
 
-The standard fix is **self-supervised inpainting**:
+One common approach is self-supervised inpainting:
 1. Take the observed (gappy) `chlor_a` for a day.
-2. Add **extra synthetic gaps** on top (our existing +N-day mask-shift trick — and because PACE
-   gaps are *banded*, shifting a real day's gap mask naturally produces realistic banded fake
-   gaps, so this transfers well).
-3. Input = observed **with** the synthetic gaps punched out; target = the observed field.
-4. **Loss is computed only where the target is actually observed** (and ideally only on the
-   held-out synthetic-gap pixels). Everything NaN/land is ignored.
+2. Add extra synthetic gaps on top (our existing `+N-day` mask-shift trick). Because PACE gaps are
+   banded [S3], shifting a real day's gap mask should produce realistic banded fake gaps, so this
+   part may transfer well.
+3. Input is the observed field with the synthetic gaps punched out; target is the observed field.
+4. Loss is computed only where the target is actually observed (ideally only on the held-out
+   synthetic-gap pixels). NaN, land, and real gaps are ignored.
 
-That requires a **masked loss** — we can't use plain `mse` because most of a global frame is
-NaN/land/gap:
+That points to a masked loss rather than plain `mse`, since most of a global frame is NaN, land,
+or gap:
 
 ```python
 def masked_mse(y_true, y_pred):
@@ -74,56 +83,63 @@ def masked_mse(y_true, y_pred):
     return tf.reduce_sum(se) / (tf.reduce_sum(mask) + 1e-6)
 ```
 
-and the generator yields a 2-channel `y = stack([value, mask])`. This is a genuine change from
-the current notebook and worth aligning on with the data scientists (they may have a preferred
-inpainting objective / partial-conv approach).
+with the generator yielding a 2-channel `y = stack([value, mask])`. This is a real change from the
+current notebook, so it is worth checking whether they have a preferred objective.
 
-## Problem 3 — Banded gaps, empty tiles, and global position
+Questions: is masked MSE the right objective, or do they prefer partial convolutions or another
+inpainting setup? Does the `+N-day` fake-gap trick risk leakage given PACE's orbital repeat cycle?
+Is there a coverage or quality flag that distinguishes real gap from cloud from land?
 
-- **Tile filtering.** Globally, a huge fraction of `(day, tile)` pairs are all-land or fully
-  inside a swath gap. Training on them is wasteful/harmful. Skip any tile whose valid-ocean
-  fraction is below a threshold (the tutorial did the day-level analog: drop days with >5% NaN
-  response). Do it in the generator (`continue`) or pre-compute a valid tile-index list.
-- **Land/ocean mask.** PACE L3M CHL has no land flag variable — derive one (`chlor_a` all-NaN
-  across time ≈ land, like the tutorial's `invalid_ocean`), or bring an external land mask.
-- **Global position matters.** A single region model didn't need location; a global model does
-  (Chl dynamics differ by latitude/biome). Add **normalized lat/lon** (or `sin/cos` of lat) as
-  input channels so the network knows where each tile sits.
-- **Predictors are thin.** The CHL store has only `chlor_a`. Options: (a) start CHL-only
-  (masked `chlor_a` + prev/next-day + time + lat/lon + gap flags); (b) join `PACE_OCI_L3M_RRS`
-  bands as predictors; (c) join an SST product. Recommend starting with (a) to get the tiling +
-  masked-loss pipeline working, then add predictors.
+## Area 3: banded gaps, empty tiles, and global position
 
----
+- Tile filtering. Globally, we expect many `(day, tile)` pairs to be all-land or fully inside a
+  swath gap. Training on those seems wasteful, so we would probably skip tiles whose valid-ocean
+  fraction is below a threshold. The OHW Part I tutorial did the day-level analog, dropping days
+  with more than 5 percent NaN in the response [S7]. Threshold TBD.
+- Land or ocean mask. This store looks like it has only `chlor_a` and `palette`, with no land flag
+  [S2], so we may need to derive an ocean mask (for example, pixels that are always NaN across time
+  approximate land, as in the tutorial's `invalid_ocean` step [S7]), or bring an external mask.
+- Global position. A single-region model did not need location, but a global model probably does,
+  since Chl behavior varies by latitude and biome. Adding normalized lat/lon (or sin/cos of lat) as
+  input channels is one option to discuss.
+- Predictors are thin. This store has only `chlor_a` [S2]. Options: (a) start CHL-only (masked
+  `chlor_a`, prev/next-day, time, lat/lon, gap flags); (b) join `PACE_OCI_L3M_RRS` bands; (c) join
+  an SST product. We lean toward (a) first just to get the pipeline working, but this is open.
 
-## Proposed first milestone (something runnable in-region)
+Questions: which co-gridded predictors do they recommend, and how to join them efficiently
+in-region? Is deriving the land mask from all-time-NaN acceptable, or is there a canonical mask?
 
-Small, end-to-end, on a **subset** — not the whole globe on day one:
+## A possible first milestone (to sanity check with them)
 
-1. `create_ds("PACE_OCI_L3M_CHL", "daily/0p1deg/chunks_512")` + `chunks_16`, concat, `sortby`.
-2. Subset to a manageable band (e.g. a 30°×60° box, ~90 days) and **rechunk** to `{time:1, lat:128, lon:128}`.
-3. `build_pace_lazy(...)` — a PACE variant of `build_standardized_lazy`: `log10(chlor_a>0)`,
-   prev/next-day, sin/cos time, lat/lon channels, gap/valid flags, +N-day fake-gap mask.
-   Standardize predictors on a train-time window (label left in log space — our new default).
-4. `BatchGenerator` with spatial `input_dims` + overlap; `make_tf_gen` variant that **skips empty
-   tiles** and yields `y = [value, mask]`.
-5. Same U-Net, `loss=masked_mse`, batch 1, BatchNorm (per our finding).
+Small and end-to-end on a subset, not the whole globe on day one. This is a strawman, not a plan:
+
+1. `create_ds("PACE_OCI_L3M_CHL", "daily/0p1deg/chunks_512")` plus `chunks_16`, concat, sort by
+   time [S6].
+2. Subset to a manageable box (for example 30 by 60 degrees, roughly 90 days) and rechunk to
+   `{time:1, lat:128, lon:128}`.
+3. `build_pace_lazy(...)`, a PACE variant of `build_standardized_lazy`: `log10(chlor_a>0)` [S8],
+   prev/next-day, sin/cos time, lat/lon channels, gap and valid flags, plus the `+N-day` fake-gap
+   mask. Standardize predictors on a train-time window; leave the label in log space (our new
+   default).
+4. `BatchGenerator` with spatial `input_dims` plus overlap; a `make_tf_gen` variant that skips
+   empty tiles and yields `y = [value, mask]`.
+5. Same U-Net, `loss=masked_mse`, batch 1, BatchNorm (per our earlier finding on this image).
 6. Reassemble tiles (average the overlaps) to view a full-region gap-filled map.
 
-### Skeleton (adapt in us-west-2; not runnable from here)
+### Skeleton (would run in us-west-2; we cannot run it from here)
 
 ```python
 # --- data ---
 ds512 = create_ds("PACE_OCI_L3M_CHL", "daily/0p1deg/chunks_512")
 ds16  = create_ds("PACE_OCI_L3M_CHL", "daily/0p1deg/chunks_16")
 ds = xr.concat([ds512, ds16], dim="time", coords="minimal",
-               compat="override", combine_attrs="override").sortby("time")
+               compat="override", combine_attrs="override").sortby("time")   # [S6]
 
 ds = ds.sel(lat=slice(30, 0), lon=slice(50, 80))          # subset for the prototype
-ds = ds.chunk({"time": 1, "lat": 128, "lon": 128})        # uniform, tile-friendly
+ds = ds.chunk({"time": 1, "lat": 128, "lon": 128})        # uniform, tile-friendly (proposed)
 
 # --- lazy feature build (PACE variant of build_standardized_lazy) ---
-# log10(chlor_a>0); prev/next-day; sin/cos time; lat/lon channels; valid + fake-gap flags;
+# log10(chlor_a>0); prev/next-day; sin/cos time; lat/lon channels; valid and fake-gap flags;
 # standardize predictors on train window; leave label in log space (standardize_chl=False).
 
 # --- tiled streaming ---
@@ -148,29 +164,52 @@ def make_tf_gen_masked(batcher, x_vars, min_valid=0.05):
 # model.compile(optimizer="adam", loss=masked_mse, metrics=[...])
 ```
 
----
+## Consolidated questions for the eScience data scientists
 
-## Open questions for the eScience data scientists
+1. Access at training scale: best pattern for high-throughput reads from the Icechunk store during
+   training (dask cluster or gateway on CryoCloud, local caching), and expected in-region throughput
+   for tiled random access.
+2. Rechunking: persist a rechunked ML-ready training zarr (uniform `{1,128,128}`), or tile directly
+   off the virtual store? How to handle the `chunks_16` vs `chunks_512` seam [S6]?
+3. Grid: 0p1deg vs 4km for a first global model, given storage, throughput, and GPU.
+4. Objective: preferred self-supervised inpainting setup for banded L3 gaps (masked MSE, partial
+   convolutions, or other), and any leakage concerns with the `+N-day` fake-gap trick.
+5. Swath and quality metadata: is there a per-day coverage or swath-geometry mask to separate real
+   gap from cloud from land? (This store as read appears to have no land flag [S2].)
+6. Co-gridded predictors: recommended companion variables (SST, RRS bands from the RRS store) on
+   the same grid, and how to join them efficiently in-region.
+7. Compute: GPU availability in us-west-2, and cluster vs single node for training.
 
-1. **Access at training scale.** Best pattern for high-throughput reads from the Icechunk store
-   during training — dask cluster / gateway on CryoCloud? Local caching? Expected read throughput
-   in-region for tiled random access?
-2. **Rechunking.** Should we persist a rechunked, ML-ready training zarr (uniform `{1,128,128}`),
-   or tile directly off the virtual store? How to handle the `chunks_16` vs `chunks_512` seam?
-3. **Grid.** 0p1deg vs 4km for a first global model — recommendation given storage/throughput/GPU?
-4. **Objective.** Do they have a preferred self-supervised inpainting setup for banded L3 gaps
-   (masked MSE vs partial convolutions vs something else)? Any leakage concerns with the
-   +N-day fake-gap trick given orbital repeat cycles?
-5. **Swath/quality metadata.** Is there a per-day coverage or swath-geometry mask we should use to
-   distinguish "real gap" from "cloud" from "land"? (PACE L3M CHL as read has no land flag.)
-6. **Co-gridded predictors.** Recommended companion variables (SST, RRS bands from the RRS store)
-   already on the same grid, and how to join them efficiently in-region.
-7. **Compute.** GPU availability in us-west-2 for training, and whether they'd run this on a
-   cluster vs single node.
-
-## Notes / carryover from the Arab Sea work
+## Carryover from the Arab Sea work
 
 - `mtg.build_standardized_lazy(..., standardize_chl=False)` and the pass-through `mtg.make_tf_gen`
-  are the reusable primitives; the PACE versions are variants of these (spatial tiling + masked y).
-- Keep **BatchNorm** (LayerNorm/GroupNorm hit this image's GPU kernels; BatchNorm at batch 1 works).
-- Don't hardcode chunk sizes — read `ds.chunksizes` and align tiles to them.
+  are the reusable primitives; the PACE versions would be variants (spatial tiling plus masked y).
+- Keep BatchNorm for now (LayerNorm and GroupNorm hit this image's GPU kernels; BatchNorm at
+  batch 1 works). This was specific to our environment and should be re-checked in theirs.
+- Do not hardcode chunk sizes; read `ds.chunksizes` and align tiles to whatever is there.
+
+## Sources
+
+Primary PACE references (the store and its example notebook):
+- [P1] fish-pace/pace-icechunks repo: https://github.com/fish-pace/pace-icechunks
+- [P2] pace-icechunk-examples.ipynb:
+  https://github.com/fish-pace/pace-icechunks/blob/main/pace-icechunk-examples.ipynb
+
+- [S1] PACE `ds` repr in [P2]: `chlor_a (time, lat, lon) float32` with
+  `chunksize=(1, 16, 1024)`, dims `time: 710, lat: 1800, lon: 3600`, time span 2024-03-05 to
+  2026-02-28.
+- [S2] PACE CHL `ds` repr in [P2]: data variables are `chlor_a` and `palette` only (no gapfree, no
+  land flag). Store description in [P1] lists `PACE_OCI_L3M_CHL` and `PACE_OCI_L3M_RRS`.
+- [S3] User note from the meeting: PACE is "very banded data, gaps missing in bands," consistent
+  with orbital swath coverage.
+- [S4] [P1] / [P2]: "requires you are in AWS us-west-2," and auth via `earthaccess.login()` plus
+  `get_s3_credentials(daac="OBDAAC")`.
+- [S5] This session's chunk diagnostic on `IO.zarr` cropped: `time` chunks all 100 (last 71),
+  `lat (104,)`, `lon (152,)`.
+- [S6] [P1] / [P2]: daily CHL split into `daily/0p1deg/chunks_512` and `chunks_16` subgroups by
+  date (before vs after 2026-02); "these subgroups need to be merged after reading," via
+  `xr.concat(...).sortby("time")`.
+- [S7] OHW "Preparing a Zarr dataset for our CNN training" tutorial: drops days with more than
+  5 percent NaN in the response and builds an ocean mask from always-NaN SST (`invalid_ocean`).
+  (No URL captured; from the notebook text shared this session.)
+- [S8] PACE plot example in [P2]: `np.log10(da_small.where(da_small > 0))`.
