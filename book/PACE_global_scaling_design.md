@@ -9,6 +9,38 @@ Most of the "facts" below are read off the PACE material shared with us; citatio
 to the source so we can double check them with the data scientists. See the Sources list at the
 bottom.
 
+## Update: concrete details from Eli's PACE notebook (meeting 2026-07-02)
+
+Eli built a notebook that creates `zarr_ds` from PACE for the Indian Ocean, daily and 8-day [P3].
+Key specifics and guidance that sharpen the plan:
+
+- **Use `chunks_512` only for now.** Eli found the `chunks_512` + `chunks_16` concat to be a memory
+  hog, so the current approach skips it and reads `chunks_512` alone [P3]. That mostly retires our
+  earlier open question about reconciling the two subgroups.
+- **`create_ds` opens with `chunks={}`** [P3], which matches the chunk-aware reading we planned.
+- **Arabian Sea daily (chunks_512), cropped to lat 5 to 31, lon 42 to 80:** dims
+  `time: 683, lat: 260, lon: 380`, `chlor_a` only, chunk `(1, 260, 380)` [P3]. Two things follow:
+  - Resolution is **260 x 380** at 0.1 deg, different from the CMEMS 104 x 152. The U-Net input
+    shape changes (cropping to a multiple of 8 gives 256 x 376). Eli flagged this explicitly.
+  - For a region this size the whole crop is **one spatial chunk per day**, so spatial tiling is
+    not needed for the Arabian Sea itself. Tiling (Area 1 below) only matters if we later go to a
+    much larger or global extent.
+- **8-Day product (8Day/0p1deg/chunks_512):** dims `time: 87, lat: 260, lon: 380` [P3]. Far fewer
+  time steps, but per Eli a lot less missing data than daily.
+- **Daily vs 8-Day is now an open decision.** Daily has 683 steps but heavy banded missingness;
+  8-day has only 87 steps but much fuller coverage. Eli's suggestion is either to focus on filling
+  the **8-day** product, or do **daily but add 3 days before and 3 days after** as temporal context
+  (an extension of the prev/next-day channels to a plus/minus 3 day window).
+- **We do need a test set** (Eli reversed an earlier "no test data" note).
+- **Train/val/test split is genuinely open** given only about 678 days and strong temporal
+  autocorrelation. A naive random or contiguous split risks leakage because nearby days are
+  correlated. Worth asking the data scientists how they would split (for example contiguous blocks
+  with a buffer gap between them, or holding out whole seasons) to keep leakage low while retaining
+  enough data.
+
+Still unchanged and central: PACE (this store) has no L4 gapfree product, so training stays
+self-supervised masked reconstruction (Area 2), and the gaps are banded (Area 3).
+
 ## What seems to change (for discussion)
 
 | Aspect | Arab Sea `IO.zarr` (current) | Global PACE OCI (target) |
@@ -194,6 +226,10 @@ Primary PACE references (the store and its example notebook):
 - [P1] fish-pace/pace-icechunks repo: https://github.com/fish-pace/pace-icechunks
 - [P2] pace-icechunk-examples.ipynb:
   https://github.com/fish-pace/pace-icechunks/blob/main/pace-icechunk-examples.ipynb
+- [P3] Eli's Indian Ocean PACE batches notebook (daily + 8-day zarr_ds creation):
+  https://github.com/SAFS-Varanasi-Internship/mindthegap/blob/eli-branch/contributor_folders/eli/PACE_CHL_batches.ipynb
+  (source for the 260x380 Arabian Sea dims, `time: 683` daily / `time: 87` 8-day, `chunks_512`-only
+  approach, `chunks={}` open, and Eli's guidance on test data, +/-3 day context, and the split.)
 
 - [S1] PACE `ds` repr in [P2]: `chlor_a (time, lat, lon) float32` with
   `chunksize=(1, 16, 1024)`, dims `time: 710, lat: 1800, lon: 3600`, time span 2024-03-05 to
