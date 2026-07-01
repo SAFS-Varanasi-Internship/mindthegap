@@ -1,5 +1,7 @@
 from typing import Union
 import xarray as xr
+import numpy as np
+import dask.array as da
 
 def crop_to_multiple(
     ds: Union[xr.Dataset, xr.DataArray],
@@ -210,97 +212,184 @@ def compute_mse(y_true, y_pred):
 
 import numpy as np
 
-def make_tf_gen(batcher, x_vars, y_mean, y_std, feature_stats):
+def make_tf_gen(batcher, x_vars, label="CHL"):
     """
-    Creates a generator function for TensorFlow `tf.data.Dataset.from_generator`.
-    
-    This factory function iterates through an xbatcher dataset, applies synthetic 
-    cloud masking, standardizes variables (log-transforming Chlorophyll), and 
-    constructs the input features (X) and target labels (y) for a neural network.
-    
-    Args:
-        batcher (xbatcher.BatchGenerator): An iterable xbatcher object containing 
-            chunked xarray datasets.
-        x_vars (list of str): List of feature names to extract and stack into 
-            the final input tensor. Accepts dataset variables and special keywords:
-            'masked_CHL', 'fake_cloud_flag', 'sin_time', and 'cos_time'.
-        y_mean (float): The mean of the log-transformed target variable (for standardization).
-        y_std (float): The standard deviation of the log-transformed target variable.
-        feature_stats (dict): Dictionary containing the mean and standard deviation 
-            for standardizing other input variables. Format: {'var_name': (mean, std)}.
-            
-    Returns:
-        callable: A generator function `gen()` that yields tuples of (x, y) 
-        where `x` is the input tensor and `y` is the target tensor.
+    Build a generator for ``tf.data.Dataset.from_generator`` that streams an xbatcher
+    dataset one time step at a time.
+
+    This is a *pass-through* generator: it assumes the batcher yields data whose channels
+    are already engineered and standardized (e.g. the output of `build_standardized_lazy`).
+    For each time step it stacks ``x_vars`` into an ``(lat, lon, len(x_vars))`` input tensor
+    and returns ``label`` as the ``(lat, lon, 1)`` target. NaNs are replaced with 0.0.
+
+    (The previous version of this function engineered the fake clouds / masked CHL / time
+    features on the fly; that logic now lives in `build_standardized_lazy`, so the generator
+    only has to stack and yield.)
+
+    Parameters
+    ----------
+    batcher : xbatcher.BatchGenerator
+        Iterable of chunked xarray blocks (e.g. 100-day blocks).
+    x_vars : sequence of str
+        Channel names to stack, in the desired channel order.
+    label : str, default "CHL"
+        Name of the target variable in each block.
+
+    Returns
+    -------
+    callable
+        A zero-arg generator ``gen()`` yielding ``(x, y)`` float32 tuples, where ``x`` has
+        shape ``(lat, lon, len(x_vars))`` and ``y`` has shape ``(lat, lon, 1)``.
     """
     def gen():
         for batch in batcher:
+            batch = batch.load()  # materialize one block once (bounded RAM, avoids per-step recompute)
             time_len = batch.sizes["time"]
             for t in range(time_len):
-                
-                # --- 1. Synthetic Cloud Masking ---
-                # Shift the cloud mask by 10 days to create "fake" clouds that 
-                # do not perfectly correlate with the true missing data.
-                fake_t = (t + 10) % time_len 
-                fake_cloud_flag = batch['CHL_cmes-cloud'].isel(time=fake_t).values
-                # Replace any NaN flags with 0.0 (no cloud)
-                fake_cloud_flag = np.where(np.isnan(fake_cloud_flag), 0.0, fake_cloud_flag)
-
-                # --- 2. Target Variable (True CHL) Preparation ---
-                raw_true_chl = batch['CHL_cmes-gapfree'].isel(time=t).values
-                
-                # Suppress warnings for log(0) or log(NaN) temporarily
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    log_true_chl = np.log(raw_true_chl)
-                    
-                # Standardize the log-transformed true CHL using injected params
-                true_chl_std = (log_true_chl - y_mean) / y_std
-                true_chl_std = np.where(np.isnan(true_chl_std), 0.0, true_chl_std)
-                true_chl_std = np.where(np.isinf(true_chl_std), 0.0, true_chl_std)
-                
-                # Apply the synthetic cloud mask to create the input CHL feature
-                masked_chl = np.where(fake_cloud_flag == 1, 0.0, true_chl_std)
-
-                # --- 3. Cyclical Time Encoding ---
-                # Convert the day of the year into continuous circular features 
-                # so the model understands that Dec 31st and Jan 1st are adjacent.
-                day_of_year = batch['time'].isel(time=t).dt.dayofyear.item()
-                sin_grid = np.full(raw_true_chl.shape, np.sin(2 * np.pi * day_of_year / 365), dtype=np.float32)
-                cos_grid = np.full(raw_true_chl.shape, np.cos(2 * np.pi * day_of_year / 365), dtype=np.float32)
-
-                # --- 4. Input Tensor Assembly ---
-                x_slice = []
-                for var in x_vars:
-                    # Handle computed/special variables
-                    if var == 'masked_CHL':
-                        x_slice.append(masked_chl)
-                    elif var == 'fake_cloud_flag':
-                        x_slice.append(fake_cloud_flag)
-                    elif var == 'sin_time':
-                        x_slice.append(sin_grid)
-                    elif var == 'cos_time':
-                        x_slice.append(cos_grid)
-                    
-                    # Handle standard dataset variables
-                    else:
-                        # Extract raw values and fill NaNs with 0.0
-                        raw_val = np.where(np.isnan(batch[var].isel(time=t).values), 0.0, batch[var].isel(time=t).values)
-                        
-                        # Standardize using the injected feature_stats if available
-                        if var in feature_stats:
-                            final_val = (raw_val - feature_stats[var][0]) / feature_stats[var][1]
-                        else:
-                            final_val = raw_val
-                            
-                        x_slice.append(final_val)
-
-                # --- 5. Yielding Batch ---
-                # Stack all feature arrays along the last dimension (channels)
-                x = np.stack(x_slice, axis=-1).astype(np.float32)
-                
-                # Expand dimensions of y to match expected shape (..., 1)
-                y = true_chl_std.astype(np.float32)[..., np.newaxis]
-                
+                x = np.stack(
+                    [np.nan_to_num(batch[v].isel(time=t).values, nan=0.0) for v in x_vars],
+                    axis=-1,
+                ).astype(np.float32)
+                y = np.nan_to_num(batch[label].isel(time=t).values, nan=0.0).astype(np.float32)[..., np.newaxis]
                 yield x, y
-                
+
     return gen
+
+
+def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False):
+    """
+    Lazy, on-the-fly equivalent of `create_zarr.data_preprocessing` that returns a
+    dask-backed standardized ``xr.Dataset`` instead of writing a Zarr store.
+
+    It builds exactly the same variables as `data_preprocessing` -- log CHL label,
+    ``sin_time``/``cos_time``, the 10-day-shift ``masked_CHL``, ``prev_day_CHL``/
+    ``next_day-CHL``, and the ``land``/``real_cloud``/``valid_CHL``/``fake_cloud`` flags --
+    standardizing the numeric predictors with training-window statistics. Because the
+    result stays lazy, it can be streamed block-by-block with xbatcher directly from raw
+    ``IO.zarr`` (no intermediate Zarr on disk).
+
+    NOTE: keep this in sync with `create_zarr.data_preprocessing` -- the two intentionally
+    mirror each other. `data_preprocessing` is the write-to-Zarr path (used by the Fit
+    notebook); this is the stream-from-raw path (used by the streaming notebook).
+
+    Parameters
+    ----------
+    zarr_ds : xr.Dataset
+        Raw (already region-sliced / cropped) dataset containing at least
+        ``CHL_cmes-level3``, ``CHL_cmes-cloud`` and every name in ``features``.
+    features : sequence of str
+        Raw numeric predictor names to include (e.g. ``['u_wind', 'v_wind', 'sst', 'air_temp']``).
+    train_year : int
+        First calendar year of the training window (used for standardization stats).
+    train_range : int
+        Number of years in the training window.
+    standardize_chl : bool, default False
+        If True, standardize the CHL *label* to zero mean / unit std using its all-time
+        statistics (matches `data_preprocessing`). If False (default), the label is left as
+        log CHL: standardizing the label has no measurable effect on model quality, and
+        leaving it unscaled means predictions come out directly in log space (no
+        unstandardization needed). When False, ``stats['CHL']`` is ``[0.0, 1.0]`` so any
+        downstream ``pred * std + mean`` is a no-op.
+
+    Returns
+    -------
+    ds_out : xr.Dataset
+        Lazy standardized dataset: predictor channels + ``CHL`` label, chunked
+        ``{"time": 100, "lat": -1, "lon": -1}``.
+    stats : dict
+        ``{'CHL': array([mean, std]), 'masked_CHL': array([mean, std])}`` (train-window
+        stats; ``CHL`` is ``[0.0, 1.0]`` when ``standardize_chl=False``).
+    """
+    numer_features = []
+    cat_features = []
+
+    # raw numerical predictors
+    for feature in features:
+        numer_features.append(zarr_ds[feature].data)
+
+    # label: log(level3)  (NOTE: prep uses level3, not gapfree)
+    CHL_data = np.log(zarr_ds['CHL_cmes-level3'].copy())
+
+    # sin/cos seasonal encoding (days since 1900), standardized below
+    time_data = da.array(zarr_ds.time)
+    day_rad = (time_data - np.datetime64("1900-01-01")) / np.timedelta64(1, "D") / 365 * 2 * np.pi
+    day_rad = day_rad.astype(np.float32)
+    day_sin = np.sin(day_rad)
+    day_cos = np.cos(day_rad)
+    day_sin = np.tile(day_sin[:, np.newaxis, np.newaxis], (1,) + CHL_data[0].shape)
+    day_sin = da.rechunk(day_sin, (100, *day_sin.shape[1:]))
+    numer_features.append(day_sin)
+    day_cos = np.tile(day_cos[:, np.newaxis, np.newaxis], (1,) + CHL_data[0].shape)
+    day_cos = da.rechunk(day_cos, (100, *day_cos.shape[1:]))
+    numer_features.append(day_cos)
+
+    # artificially masked CHL (10-day shift)
+    day_shift_flag = np.vstack((zarr_ds['CHL_cmes-cloud'].data[10:], zarr_ds['CHL_cmes-cloud'].data[:10]))
+    assert CHL_data.shape == day_shift_flag.shape
+    masked_CHL = da.where(day_shift_flag == 0, np.nan, CHL_data)
+    numer_features.append(masked_CHL)
+
+    prev_day = np.vstack((np.zeros((1,) + CHL_data[0].shape), CHL_data.data[:-1]))
+    numer_features.append(prev_day)
+    next_day = np.vstack((CHL_data.data[1:], np.zeros((1,) + CHL_data[0].shape)))
+    numer_features.append(next_day)
+
+    # categorical flags (NOT standardized)
+    land_flag = da.zeros(CHL_data.shape)
+    land_flag = da.where(zarr_ds['CHL_cmes-cloud'][0] == 2, 1, land_flag)
+    cat_features.append(land_flag)
+
+    real_cloud_flag = da.zeros(CHL_data.shape)
+    real_cloud_flag = da.where(zarr_ds['CHL_cmes-cloud'] == 1, 1, real_cloud_flag)
+    cat_features.append(real_cloud_flag)
+
+    valid_CHL_flag = da.zeros(CHL_data.shape)
+    valid_CHL_flag = da.where(~da.isnan(masked_CHL), 1, valid_CHL_flag)
+    cat_features.append(valid_CHL_flag)
+
+    fake_cloud_flag = da.zeros(CHL_data.shape)
+    fake_cloud_flag = da.where((land_flag + real_cloud_flag + valid_CHL_flag) == 0, 1, fake_cloud_flag)
+    cat_features.append(fake_cloud_flag)
+
+    # train-window mean/std for numerical predictors
+    train_start_ind = np.where(zarr_ds.time.values == np.datetime64(f'{train_year}-01-01'))[0][0]
+    train_end_ind = np.where(zarr_ds.time.values == np.datetime64(f'{train_year + train_range}-01-01'))[0][0]
+
+    feat_mean, feat_stdev = [], []
+    for feature in numer_features:
+        feature_train = feature[train_start_ind:train_end_ind]
+        feat_mean.append(da.nanmean(feature_train).compute())
+        feat_stdev.append(da.nanstd(feature_train).compute())
+
+    numer_features_stdized = [
+        (feature - mean) / stdev
+        for feature, mean, stdev in zip(numer_features, feat_mean, feat_stdev)
+    ]
+
+    # CHL label: standardize (all-time stats) only if asked; otherwise leave as log CHL
+    if standardize_chl:
+        CHL_mean = da.nanmean(CHL_data).compute()
+        CHL_stdev = da.nanstd(CHL_data).compute()
+        CHL_out = (CHL_data - CHL_mean) / CHL_stdev
+    else:
+        CHL_mean, CHL_stdev = 0.0, 1.0
+        CHL_out = CHL_data
+
+    numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL']
+    cat_var_names = ['land_flag', 'real_cloud_flag', 'valid_CHL_flag', 'fake_cloud_flag']
+
+    data_vars = {}
+    for name, arr in zip(numer_var_names, numer_features_stdized):
+        data_vars[name] = (("time", "lat", "lon"), arr)
+    for name, arr in zip(cat_var_names, cat_features):
+        data_vars[name] = (("time", "lat", "lon"), arr)
+    data_vars["CHL"] = (("time", "lat", "lon"), CHL_out.data)
+
+    coords = {c: zarr_ds.coords[c] for c in ("time", "lat", "lon")}
+    ds_out = xr.Dataset(data_vars=data_vars, coords=coords).chunk({"time": 100, "lat": -1, "lon": -1})
+
+    stats = {
+        'CHL': np.array([CHL_mean, CHL_stdev]),
+        'masked_CHL': np.array([feat_mean[-3], feat_stdev[-3]]),
+    }
+    return ds_out, stats
