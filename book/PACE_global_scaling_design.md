@@ -111,7 +111,7 @@ in-region? Is deriving the land mask from all-time-NaN acceptable, or is there a
 
 ## A possible first milestone (to sanity check with them)
 
-Small and end-to-end on a subset, not the whole globe on day one. This is a strawman, not a plan:
+Small and end-to-end on a subset:
 
 1. `create_ds("PACE_OCI_L3M_CHL", "daily/0p1deg/chunks_512")` plus `chunks_16`, concat, sort by
    time [S6].
@@ -126,7 +126,7 @@ Small and end-to-end on a subset, not the whole globe on day one. This is a stra
 5. Same U-Net, `loss=masked_mse`, batch 1, BatchNorm (per our earlier finding on this image).
 6. Reassemble tiles (average the overlaps) to view a full-region gap-filled map.
 
-### Skeleton (would run in us-west-2; we cannot run it from here)
+### Skeleton (would run in us-west-2)
 
 ```python
 # --- data ---
