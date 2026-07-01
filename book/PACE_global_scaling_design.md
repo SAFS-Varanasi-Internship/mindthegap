@@ -141,61 +141,6 @@ Is there a coverage or quality flag that distinguishes real gap from cloud from 
 Questions: which co-gridded predictors do they recommend, and how to join them efficiently
 in-region? Is deriving the land mask from all-time-NaN acceptable, or is there a canonical mask?
 
-## A possible first milestone (to sanity check with them)
-
-Small and end-to-end on a subset:
-
-1. `create_ds("PACE_OCI_L3M_CHL", "daily/0p1deg/chunks_512")` plus `chunks_16`, concat, sort by
-   time [S6].
-2. Subset to a manageable box (for example 30 by 60 degrees, roughly 90 days) and rechunk to
-   `{time:1, lat:128, lon:128}`.
-3. `build_pace_lazy(...)`, a PACE variant of `build_standardized_lazy`: `log10(chlor_a>0)` [S8],
-   prev/next-day, sin/cos time, lat/lon channels, gap and valid flags, plus the `+N-day` fake-gap
-   mask. Standardize predictors on a train-time window; leave the label in log space (our new
-   default).
-4. `BatchGenerator` with spatial `input_dims` plus overlap; a `make_tf_gen` variant that skips
-   empty tiles and yields `y = [value, mask]`.
-5. Same U-Net, `loss=masked_mse`, batch 1, BatchNorm (per our earlier finding on this image).
-6. Reassemble tiles (average the overlaps) to view a full-region gap-filled map.
-
-### Skeleton (would run in us-west-2)
-
-```python
-# --- data ---
-ds512 = create_ds("PACE_OCI_L3M_CHL", "daily/0p1deg/chunks_512")
-ds16  = create_ds("PACE_OCI_L3M_CHL", "daily/0p1deg/chunks_16")
-ds = xr.concat([ds512, ds16], dim="time", coords="minimal",
-               compat="override", combine_attrs="override").sortby("time")   # [S6]
-
-ds = ds.sel(lat=slice(30, 0), lon=slice(50, 80))          # subset for the prototype
-ds = ds.chunk({"time": 1, "lat": 128, "lon": 128})        # uniform, tile-friendly (proposed)
-
-# --- lazy feature build (PACE variant of build_standardized_lazy) ---
-# log10(chlor_a>0); prev/next-day; sin/cos time; lat/lon channels; valid and fake-gap flags;
-# standardize predictors on train window; leave label in log space (standardize_chl=False).
-
-# --- tiled streaming ---
-input_dims    = {"time": 1, "lat": 128, "lon": 128}
-input_overlap = {"lat": 32, "lon": 32}
-bgen = BatchGenerator(ds_std, input_dims=input_dims, input_overlap=input_overlap)
-
-def make_tf_gen_masked(batcher, x_vars, min_valid=0.05):
-    def gen():
-        for b in batcher:
-            b = b.load()
-            for t in range(b.sizes["time"]):
-                val  = b["CHL"].isel(time=t).values
-                mask = (~np.isnan(val)).astype("float32")     # score only observed pixels
-                if mask.mean() < min_valid:                    # skip empty/land/gap tiles
-                    continue
-                x = np.stack([np.nan_to_num(b[v].isel(time=t).values, 0.0) for v in x_vars], -1).astype("float32")
-                y = np.stack([np.nan_to_num(val, 0.0), mask], -1).astype("float32")
-                yield x, y
-    return gen
-
-# model.compile(optimizer="adam", loss=masked_mse, metrics=[...])
-```
-
 ## Consolidated questions for the eScience data scientists
 
 1. Access at training scale: best pattern for high-throughput reads from the Icechunk store during
