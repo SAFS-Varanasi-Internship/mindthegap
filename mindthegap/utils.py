@@ -256,7 +256,27 @@ def make_tf_gen(batcher, x_vars, label="CHL"):
     return gen
 
 
-def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False):
+# Precomputed standardization stats for the IO.zarr Arabian Sea streaming setup
+# (features=['u_wind', 'v_wind', 'sst', 'air_temp'], train_year=2015, train_range=3,
+# region lat 5..31 / lon 42..80 cropped to a multiple of 8). Used for training *stability*,
+# not statistical significance, so the exact values are not critical. Capture them once by
+# calling build_standardized_lazy(..., use_hardcoded_stats=False) and reading
+# stats['feat_stats'] and stats['CHL'], then paste them below. They are specific to the
+# config above; a different region / feature list / train window needs its own values.
+#
+
+IO_ZARR_STATS = {
+    'feat_stats': {'u_wind': [0.776536762714386, 3.6197967529296875], 'v_wind': [0.018182145431637764, 3.4297311305999756], 
+                   'sst': [301.1195373535156, 2.034740924835205], 'air_temp': [299.70379638671875, 5.489468574523926], 
+                   'sin_time': [0.00042300199856981635, 0.7069226503372192], 'cos_time': [0.0008084691362455487, 0.7072902321815491], 
+                   'masked_CHL': [-1.266060709953308, 0.9658912420272827], 'prev_day_CHL': [-1.1477137759656528, 0.9668979047828038], 
+                   'next_day-CHL': [-1.1472761139312693, 0.9667995380360648]} ,
+    'CHL': [np.float32(-1.0840185), np.float32(0.9534597)] ,
+}
+#IO_ZARR_STATS = None
+
+
+def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False):
     """
     Lazy, on-the-fly equivalent of `create_zarr.data_preprocessing` that returns a
     dask-backed standardized ``xr.Dataset`` instead of writing a Zarr store.
@@ -290,6 +310,11 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
         leaving it unscaled means predictions come out directly in log space (no
         unstandardization needed). When False, ``stats['CHL']`` is ``[0.0, 1.0]`` so any
         downstream ``pred * std + mean`` is a no-op.
+    use_hardcoded_stats : bool, default False
+        If True, use the precomputed ``IO_ZARR_STATS`` constants instead of computing the
+        train-window mean/std from the data (no eager read). Only valid for the IO.zarr
+        Arabian Sea config the constants were captured for. Raises if ``IO_ZARR_STATS`` is
+        not populated.
 
     Returns
     -------
@@ -297,8 +322,10 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
         Lazy standardized dataset: predictor channels + ``CHL`` label, chunked
         ``{"time": 100, "lat": -1, "lon": -1}``.
     stats : dict
-        ``{'CHL': array([mean, std]), 'masked_CHL': array([mean, std])}`` (train-window
-        stats; ``CHL`` is ``[0.0, 1.0]`` when ``standardize_chl=False``).
+        ``{'CHL': array([mean, std]), 'masked_CHL': array([mean, std]), 'feat_stats': {...}}``
+        (train-window stats; ``CHL`` is ``[0.0, 1.0]`` when ``standardize_chl=False``).
+        ``feat_stats`` maps each numeric channel name to ``[mean, std]`` and can be pasted
+        into ``IO_ZARR_STATS`` to enable ``use_hardcoded_stats``.
     """
     numer_features = []
     cat_features = []
@@ -351,32 +378,48 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     fake_cloud_flag = da.where((land_flag + real_cloud_flag + valid_CHL_flag) == 0, 1, fake_cloud_flag)
     cat_features.append(fake_cloud_flag)
 
-    # train-window mean/std for numerical predictors
-    train_start_ind = np.where(zarr_ds.time.values == np.datetime64(f'{train_year}-01-01'))[0][0]
-    train_end_ind = np.where(zarr_ds.time.values == np.datetime64(f'{train_year + train_range}-01-01'))[0][0]
+    numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL']
+    cat_var_names = ['land_flag', 'real_cloud_flag', 'valid_CHL_flag', 'fake_cloud_flag']
 
-    feat_mean, feat_stdev = [], []
-    for feature in numer_features:
-        feature_train = feature[train_start_ind:train_end_ind]
-        feat_mean.append(da.nanmean(feature_train).compute())
-        feat_stdev.append(da.nanstd(feature_train).compute())
+    # Numerical-predictor mean/std: either the precomputed IO.zarr constants (no data read)
+    # or the train-window stats computed once from the data.
+    if use_hardcoded_stats:
+        if IO_ZARR_STATS is None:
+            raise ValueError(
+                "IO_ZARR_STATS is not populated. Call build_standardized_lazy(..., "
+                "use_hardcoded_stats=False) once, then paste stats['feat_stats'] and "
+                "stats['CHL'] into IO_ZARR_STATS at the top of utils.py."
+            )
+        feat_stats = IO_ZARR_STATS['feat_stats']
+        feat_mean = [feat_stats[name][0] for name in numer_var_names]
+        feat_stdev = [feat_stats[name][1] for name in numer_var_names]
+    else:
+        # train-window mean/std for numerical predictors
+        train_start_ind = np.where(zarr_ds.time.values == np.datetime64(f'{train_year}-01-01'))[0][0]
+        train_end_ind = np.where(zarr_ds.time.values == np.datetime64(f'{train_year + train_range}-01-01'))[0][0]
+        feat_mean, feat_stdev = [], []
+        for feature in numer_features:
+            feature_train = feature[train_start_ind:train_end_ind]
+            feat_mean.append(da.nanmean(feature_train).compute())
+            feat_stdev.append(da.nanstd(feature_train).compute())
+        feat_stats = {name: [float(m), float(s)] for name, m, s in zip(numer_var_names, feat_mean, feat_stdev)}
 
     numer_features_stdized = [
         (feature - mean) / stdev
         for feature, mean, stdev in zip(numer_features, feat_mean, feat_stdev)
     ]
 
-    # CHL label: standardize (all-time stats) only if asked; otherwise leave as log CHL
+    # CHL label: standardize only if asked; hardcoded or all-time stats, otherwise leave as log CHL
     if standardize_chl:
-        CHL_mean = da.nanmean(CHL_data).compute()
-        CHL_stdev = da.nanstd(CHL_data).compute()
+        if use_hardcoded_stats:
+            CHL_mean, CHL_stdev = IO_ZARR_STATS['CHL']
+        else:
+            CHL_mean = da.nanmean(CHL_data).compute()
+            CHL_stdev = da.nanstd(CHL_data).compute()
         CHL_out = (CHL_data - CHL_mean) / CHL_stdev
     else:
         CHL_mean, CHL_stdev = 0.0, 1.0
         CHL_out = CHL_data
-
-    numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL']
-    cat_var_names = ['land_flag', 'real_cloud_flag', 'valid_CHL_flag', 'fake_cloud_flag']
 
     data_vars = {}
     for name, arr in zip(numer_var_names, numer_features_stdized):
@@ -391,5 +434,6 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     stats = {
         'CHL': np.array([CHL_mean, CHL_stdev]),
         'masked_CHL': np.array([feat_mean[-3], feat_stdev[-3]]),
+        'feat_stats': feat_stats,
     }
     return ds_out, stats
