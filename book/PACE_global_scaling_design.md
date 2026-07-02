@@ -61,17 +61,36 @@ daily-vs-8-day and a leakage-safe split, are the ones we most want their read on
 
 ## Practical questions: land mask and predictors
 
-- **Land / ocean mask.** This store has only `chlor_a` and `palette`, with no land flag [S2]. We
-  would derive an ocean mask (for example, pixels that are always NaN across time approximate land,
-  as in the OHW tutorial's `invalid_ocean` step [S7]) unless there is a canonical mask to use
-  instead.
-- **Predictors are thin.** Only `chlor_a` is in this store [S2]. We would start CHL-only (masked
-  `chlor_a`, prev/next-day, time, gap flags) and could add RRS bands (`PACE_OCI_L3M_RRS`) or an SST
-  product later. Which co-gridded predictors would they recommend, and how to join them in-region?
+**Land / ocean mask.** The model should ignore land pixels: they hold no chlorophyll to fill, and
+we do not want them counted in the loss. In the Arab Sea `IO.zarr` a `land_flag` variable was
+provided for exactly this. The PACE CHL store does not include one, it has only `chlor_a` (the
+chlorophyll values) and `palette` (a color lookup table for plotting, not usable as data) [S2]. So
+we would have to build the mask ourselves. The simplest way is to treat any pixel that is NaN on
+every day as land, since land is never measured (the OHW tutorial calls this `invalid_ocean` [S7]),
+but that is only approximate because it also catches ocean pixels that happen to be missing on
+every day. **Question:** is deriving land from all-time-NaN good enough, or is there an official
+land or coastline mask they would point us to?
 
-Once we scale beyond a single region, two more things come back: filtering out tiles that are all
-land or all gap, and adding lat/lon position channels so a global model knows where each tile sits.
-Neither is needed for the Arabian Sea run.
+**Predictors.** Predictors are the extra input channels the model gets alongside the gappy
+chlorophyll to help it fill the gaps. The Arab Sea model had several (sea-surface temperature,
+salinity, winds, air temperature, plus previous and next-day CHL and the flags). The PACE CHL store
+has only `chlor_a` [S2], so the only inputs we can build from it are ones derived from CHL itself:
+the masked CHL, previous and next-day CHL, a day-of-year time encoding, and the gap flags. To get
+richer inputs we could pull reflectance bands from the sibling PACE RRS store (`PACE_OCI_L3M_RRS`)
+or bring in an outside SST product. The catch is that an extra variable only helps if it sits on the
+**same lat/lon grid and the same days** as the CHL, so each pixel lines up cell-for-cell; if it is
+on a different grid it has to be regridded first, which is extra work and a source of error.
+**Question:** which extra variables would they recommend, and are any of them already on the PACE
+grid so we can join them directly instead of regridding?
+
+Two more things come back only if we later scale past a single region, and neither is needed for
+the Arabian Sea run:
+- **Tile filtering.** A large or global area gets cut into many small patches, and a lot of those
+  patches will be entirely land or entirely inside a data gap. Training on them wastes effort and
+  can hurt the model, so we would skip any patch whose ocean-with-data fraction is too low.
+- **Position channels.** A global model sees many regions at once, and chlorophyll behaves
+  differently by latitude and ecosystem, so we would feed each patch its lat/lon to tell the model
+  where it sits. A single-region model does not need this because the location never changes.
 
 ## Consolidated questions for the eScience data scientists
 
@@ -81,8 +100,9 @@ Neither is needed for the Arabian Sea run.
    (buffered contiguous blocks, whole-season holdout, other) while keeping enough data? [P3]
 3. Metadata: is there a per-day coverage or quality flag that separates real gap from cloud from
    land? (This store as read has no land flag [S2].)
-4. Predictors: recommended co-gridded companions (SST, RRS bands from the RRS store) and how to
-   join them efficiently in-region.
+4. Predictors: which extra input variables would they recommend (for example SST, or RRS bands
+   from the sibling RRS store), and are any already on the same lat/lon grid and days as the CHL so
+   we can join them without regridding?
 5. Access and compute: high-throughput reads from the Icechunk store during training (dask on
    CryoCloud, caching), and GPU availability in us-west-2.
 
