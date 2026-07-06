@@ -276,7 +276,7 @@ IO_ZARR_STATS = {
 #IO_ZARR_STATS = None
 
 
-def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False):
+def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False, output_chunks=None):
     """
     Lazy, on-the-fly equivalent of `create_zarr.data_preprocessing` that returns a
     dask-backed standardized ``xr.Dataset`` instead of writing a Zarr store.
@@ -429,7 +429,9 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     data_vars["CHL"] = (("time", "lat", "lon"), CHL_out.data)
 
     coords = {c: zarr_ds.coords[c] for c in ("time", "lat", "lon")}
-    ds_out = xr.Dataset(data_vars=data_vars, coords=coords).chunk({"time": 100, "lat": -1, "lon": -1})
+    if output_chunks is None:
+        output_chunks = {"time": 100, "lat": -1, "lon": -1}
+    ds_out = xr.Dataset(data_vars=data_vars, coords=coords).chunk(output_chunks)
 
     stats = {
         'CHL': np.array([CHL_mean, CHL_stdev]),
