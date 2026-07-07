@@ -5,3 +5,5 @@ mindthegap/.ipynb_checkpoints/*
 mindthegap/__pycache__
 data/
 Untitled*
+
+*.egg-info
