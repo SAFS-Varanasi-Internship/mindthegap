@@ -7,6 +7,24 @@ import cartopy.feature as cfeature
 from pathlib import Path
 from typing import Sequence, Union
 
+
+def _map_extent(zarr_like):
+    lon = np.asarray(zarr_like.lon.to_numpy() if hasattr(zarr_like.lon, "to_numpy") else zarr_like.lon, dtype=float)
+    lat = np.asarray(zarr_like.lat.to_numpy() if hasattr(zarr_like.lat, "to_numpy") else zarr_like.lat, dtype=float)
+
+    def _axis_bounds(coord):
+        if coord.size < 2:
+            half_step = 0.5
+            return coord[0] - half_step, coord[0] + half_step
+        start = coord[0] - (coord[1] - coord[0]) / 2
+        end = coord[-1] + (coord[-1] - coord[-2]) / 2
+        return (min(start, end), max(start, end))
+
+    lon_min, lon_max = _axis_bounds(lon)
+    lat_min, lat_max = _axis_bounds(lat)
+    return [lon_min, lon_max, lat_min, lat_max]
+
+
 def plot_prediction_observed(
     zarr_stdized,
     zarr_ds,
@@ -109,7 +127,7 @@ def plot_prediction_observed(
     vmax = np.nanmax((true_CHL, predicted_CHL))
     vmin = np.nanmin((true_CHL, predicted_CHL))
 
-    extent = [42, 101.75, -11.75, 32]
+    extent = _map_extent(zarr_stdized)
 
     fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(15, 10),
                              subplot_kw={'projection': ccrs.PlateCarree()})
@@ -268,7 +286,7 @@ def plot_prediction_gapfill(
     vmax = np.nanmax((true_CHL, predicted_CHL))
     vmin = np.nanmin((true_CHL, predicted_CHL))
 
-    extent = [42, 101.75, -11.75, 32]
+    extent = _map_extent(zarr_stdized)
     
     fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(15, 10), subplot_kw={'projection': ccrs.PlateCarree()})
     im0 = axes[0, 0].imshow(true_CHL, vmin=vmin, vmax=vmax, extent=extent, origin='upper', transform=ccrs.PlateCarree())
@@ -312,4 +330,3 @@ def plot_prediction_gapfill(
 
     plt.subplots_adjust(top=0.96)
     plt.show()
-
