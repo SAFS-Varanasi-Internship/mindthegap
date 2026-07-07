@@ -16,9 +16,7 @@ def _map_extent(zarr_like):
         if coord.size < 2:
             half_step = 0.5
             return coord[0] - half_step, coord[0] + half_step
-        start = coord[0] - (coord[1] - coord[0]) / 2
-        end = coord[-1] + (coord[-1] - coord[-2]) / 2
-        return (min(start, end), max(start, end))
+        return (float(np.min(coord)), float(np.max(coord)))
 
     lon_min, lon_max = _axis_bounds(lon)
     lat_min, lat_max = _axis_bounds(lat)
