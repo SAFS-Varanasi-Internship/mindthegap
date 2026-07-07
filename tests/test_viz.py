@@ -18,6 +18,7 @@ class _DummyAxis:
     def __init__(self):
         self.imshow_calls = []
         self.set_extent_calls = []
+        self.set_box_aspect_calls = []
 
     def imshow(self, *args, **kwargs):
         self.imshow_calls.append(kwargs)
@@ -28,6 +29,10 @@ class _DummyAxis:
 
     def set_extent(self, *args, **kwargs):
         self.set_extent_calls.append((args, kwargs))
+        return None
+
+    def set_box_aspect(self, *args, **kwargs):
+        self.set_box_aspect_calls.append((args, kwargs))
         return None
 
     def set_xlabel(self, *args, **kwargs):
@@ -104,3 +109,5 @@ def test_plot_prediction_observed_uses_coordinate_extent(monkeypatch, tmp_path):
     assert axes[0, 1].imshow_calls[0]["extent"] == expected_extent
     assert axes[0, 0].set_extent_calls[0][0][0] == expected_extent
     assert axes[0, 1].set_extent_calls[0][0][0] == expected_extent
+    assert axes[0, 0].set_box_aspect_calls[0][0][0] == 0.75
+    assert axes[0, 1].set_box_aspect_calls[0][0][0] == 0.75
