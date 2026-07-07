@@ -16,7 +16,9 @@ def _map_extent(zarr_like):
         if coord.size < 2:
             half_step = 0.5
             return coord[0] - half_step, coord[0] + half_step
-        return (float(np.min(coord)), float(np.max(coord)))
+        start = coord[0] - (coord[1] - coord[0]) / 2
+        end = coord[-1] + (coord[-1] - coord[-2]) / 2
+        return (min(start, end), max(start, end))
 
     lon_min, lon_max = _axis_bounds(lon)
     lat_min, lat_max = _axis_bounds(lat)
@@ -133,6 +135,7 @@ def plot_prediction_observed(
     im0 = axes[0, 0].imshow(true_CHL, vmin=vmin, vmax=vmax, extent=extent,
                             origin='upper', transform=ccrs.PlateCarree(), interpolation='nearest')
     axes[0, 0].add_feature(cfeature.COASTLINE)
+    axes[0, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 0].set_xlabel('longitude'); axes[0, 0].set_ylabel('latitude')
     axes[0, 0].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
     axes[0, 0].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
@@ -141,6 +144,7 @@ def plot_prediction_observed(
     im1 = axes[0, 1].imshow(flag, extent=extent, origin='upper',
                             transform=ccrs.PlateCarree())
     axes[0, 1].add_feature(cfeature.COASTLINE, color='white')
+    axes[0, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 1].set_xlabel('longitude'); axes[0, 1].set_ylabel('latitude')
     axes[0, 1].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
     axes[0, 1].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
@@ -149,6 +153,7 @@ def plot_prediction_observed(
     im2 = axes[1, 0].imshow(predicted_CHL, vmin=vmin, vmax=vmax, extent=extent,
                             origin='upper', transform=ccrs.PlateCarree(), interpolation='nearest')
     axes[1, 0].add_feature(cfeature.COASTLINE, color='white')
+    axes[1, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 0].imshow(np.where(flag == 1, np.nan, flag), vmax=2, vmin=0,
                       extent=extent, origin='upper', interpolation='nearest', alpha=1)
     axes[1, 0].set_xlabel('longitude'); axes[1, 0].set_ylabel('latitude')
@@ -161,6 +166,7 @@ def plot_prediction_observed(
                             origin='upper', transform=ccrs.PlateCarree(),
                             cmap=plt.cm.RdBu, interpolation='nearest')
     axes[1, 1].add_feature(cfeature.COASTLINE)
+    axes[1, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 1].set_xlabel('longitude'); axes[1, 1].set_ylabel('latitude')
     axes[1, 1].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
     axes[1, 1].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
@@ -288,6 +294,7 @@ def plot_prediction_gapfill(
     
     fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(15, 10), subplot_kw={'projection': ccrs.PlateCarree()})
     im0 = axes[0, 0].imshow(true_CHL, vmin=vmin, vmax=vmax, extent=extent, origin='upper', transform=ccrs.PlateCarree())
+    axes[0, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 0].set_xlabel('longitude')
     axes[0, 0].set_ylabel('latitude')
     axes[0, 0].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
@@ -295,6 +302,7 @@ def plot_prediction_gapfill(
     axes[0, 0].set_title('Log Chl-a from the Gapfree \nLevel-4 GlobColour Copernicus Product', size=14)
     
     im1 = axes[0, 1].imshow(predicted_CHL, extent=extent, origin='upper', transform=ccrs.PlateCarree())
+    axes[0, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 1].set_xlabel('longitude')
     axes[0, 1].set_ylabel('latitude')
     axes[0, 1].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
@@ -304,6 +312,7 @@ def plot_prediction_gapfill(
     vmax2 = 1
     vmin2 = -1
     im2 = axes[1, 0].imshow(log_diff, vmin=vmin2, vmax=vmax2, extent=extent, origin='upper', transform=ccrs.PlateCarree(), cmap=plt.cm.RdBu)
+    axes[1, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 0].set_xlabel('longitude')
     axes[1, 0].set_ylabel('latitude')
     axes[1, 0].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
@@ -311,6 +320,7 @@ def plot_prediction_gapfill(
     axes[1, 0].set_title('Difference Between log Copernicus Product\nand log U-Net Prediction (log Copernicus - log U-Net)', size=13)
 
     im3 = axes[1, 1].imshow(diff, vmin=vmin2, vmax=vmax2, extent=extent, origin='upper', transform=ccrs.PlateCarree(), cmap=plt.cm.RdBu)
+    axes[1, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 1].set_xlabel('longitude')
     axes[1, 1].set_ylabel('latitude')
     axes[1, 1].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
