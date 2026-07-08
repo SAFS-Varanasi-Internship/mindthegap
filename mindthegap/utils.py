@@ -454,3 +454,81 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
         'feat_stats': feat_stats,
     }
     return ds_out, stats
+
+
+def make_xbatcher(ds, patch_dims, overlap=None, preload_batch=False):
+    """
+    Create an xbatcher ``BatchGenerator`` over time/lat/lon windows (Eli's helper).
+
+    Line up ``patch_dims`` for lat/lon with the dataset's on-disk chunking so xbatcher reads
+    align (e.g. ``build_standardized_lazy(..., output_chunks={"time":100,"lat":40,"lon":56})``).
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Dataset to tile.
+    patch_dims : mapping
+        Window size per dim, e.g. ``{"time": 100, "lat": 40, "lon": 56}``.
+    overlap : mapping or None, default None
+        Overlap per dim, e.g. ``{"time": 0, "lat": 16, "lon": 16}``. None = non-overlapping.
+    preload_batch : bool, default False
+        Passed through to ``BatchGenerator`` (eagerly ``.load()`` each batch when True).
+
+    Returns
+    -------
+    xbatcher.BatchGenerator
+    """
+    import xbatcher as xb  # lazy: keep `import mindthegap` free of the xbatcher dependency
+    kwargs = dict(ds=ds, input_dims=dict(patch_dims), preload_batch=preload_batch)
+    if overlap is not None:
+        kwargs["input_overlap"] = dict(overlap)
+    return xb.BatchGenerator(**kwargs)
+
+
+def UNet(input_shape):
+    """
+    Build and compile the gap-fill U-Net (three encoder/decoder levels, MSE loss, Adam).
+
+    Fully convolutional: pass ``input_shape=(None, None, n_channels)`` to train on patches and
+    still predict on the whole domain. Spatial dims must be multiples of 8 (three 2x pools).
+
+    Parameters
+    ----------
+    input_shape : tuple
+        ``(height, width, n_channels)``; height/width may be ``None`` (fully convolutional).
+
+    Returns
+    -------
+    tf.keras.Model
+        Compiled model.
+    """
+    import tensorflow as tf  # lazy: keep `import mindthegap` free of the heavy TF import
+    from tensorflow.keras import Input, layers
+
+    inputs = Input(shape=input_shape)
+    x = inputs
+    filters = [64, 128, 256]
+    ec_images = []
+
+    for f in filters:
+        ec_images.append(x)
+        x = layers.Conv2D(f, (3, 3), padding='same', activation='relu')(x)
+        x = layers.Conv2D(f, (3, 3), padding='same', activation='relu')(x)
+        x = layers.MaxPooling2D()(x)
+        x = layers.BatchNormalization()(x)
+
+    for f, ec in zip(filters[:-1][::-1], ec_images[::-1][:-1]):
+        x = layers.Conv2DTranspose(f, 3, 2, padding='same')(x)
+        x = layers.concatenate([x, ec])
+        x = layers.Conv2D(f, (3, 3), padding='same', activation='relu')(x)
+        x = layers.Conv2D(f, (3, 3), padding='same', activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+
+    x = layers.Conv2DTranspose(f, 3, 2, padding='same')(x)
+    x = layers.concatenate([x, ec_images[0]])
+    x = layers.Conv2D(f, (3, 3), padding='same', activation='relu')(x)
+    outputs = layers.Conv2D(1, (3, 3), padding='same', activation='linear')(x)
+
+    model = tf.keras.Model(inputs, outputs, name='U-net')
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    return model
