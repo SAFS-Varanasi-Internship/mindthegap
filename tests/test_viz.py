@@ -115,5 +115,5 @@ def test_plot_prediction_observed_uses_coordinate_extent(monkeypatch, tmp_path):
     assert axes[0, 1].set_extent_calls[0][0][0] == expected_extent
     assert axes[0, 0].set_box_aspect_calls[0][0][0] == 0.75
     assert axes[0, 1].set_box_aspect_calls[0][0][0] == 0.75
-    assert np.all((axes[0, 0].set_xticks_calls[0][0][0] >= expected_extent[0]) & (axes[0, 0].set_xticks_calls[0][0][0] <= expected_extent[1]))
-    assert np.all((axes[0, 0].set_yticks_calls[0][0][0] >= expected_extent[2]) & (axes[0, 0].set_yticks_calls[0][0][0] <= expected_extent[3]))
+    assert np.allclose(axes[0, 0].set_xticks_calls[0][0][0] % 5, 0)
+    assert np.allclose(axes[0, 0].set_yticks_calls[0][0][0] % 5, 0)

@@ -25,10 +25,17 @@ def _map_extent(zarr_like):
     return [lon_min, lon_max, lat_min, lat_max]
 
 
-def _map_ticks(extent, count=5):
+def _map_ticks(extent, step=5):
     lon_min, lon_max, lat_min, lat_max = extent
-    lon_ticks = np.linspace(lon_min, lon_max, count)
-    lat_ticks = np.linspace(lat_min, lat_max, count)
+
+    def _aligned_ticks(start, end):
+        tick_start = np.ceil(start / step) * step
+        tick_end = np.floor(end / step) * step
+        ticks = np.arange(tick_start, tick_end + step, step)
+        return ticks[(ticks >= start) & (ticks <= end)]
+
+    lon_ticks = _aligned_ticks(lon_min, lon_max)
+    lat_ticks = _aligned_ticks(lat_min, lat_max)
     return lon_ticks, lat_ticks
 
 
