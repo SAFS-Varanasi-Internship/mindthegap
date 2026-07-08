@@ -25,6 +25,13 @@ def _map_extent(zarr_like):
     return [lon_min, lon_max, lat_min, lat_max]
 
 
+def _map_ticks(extent, count=5):
+    lon_min, lon_max, lat_min, lat_max = extent
+    lon_ticks = np.linspace(lon_min, lon_max, count)
+    lat_ticks = np.linspace(lat_min, lat_max, count)
+    return lon_ticks, lat_ticks
+
+
 def plot_prediction_observed(
     zarr_stdized,
     zarr_ds,
@@ -70,8 +77,8 @@ def plot_prediction_observed(
           ``'CHL_cmes-level3'`` and flag layers (``land_flag``, ``real_cloud_flag``,
           ``valid_CHL_flag``, ``fake_cloud_flag``).
     - Predictions are unstandardized with :func:`utils.unstdize`.
-    - The hard-coded map extent corresponds to the Arab Sea region
-      ``[lon_min, lon_max, lat_min, lat_max] = [42, 101.75, -11.75, 32]``.
+    - The map extent and tick marks are derived from the ``zarr_stdized`` coordinates so the
+      raster fills the panel without distortion.
 
     See Also
     --------
@@ -138,8 +145,9 @@ def plot_prediction_observed(
     axes[0, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 0].set_box_aspect((extent[3] - extent[2]) / (extent[1] - extent[0]))
     axes[0, 0].set_xlabel('longitude'); axes[0, 0].set_ylabel('latitude')
-    axes[0, 0].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
-    axes[0, 0].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
+    lon_ticks, lat_ticks = _map_ticks(extent)
+    axes[0, 0].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
+    axes[0, 0].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
     axes[0, 0].set_title('Observed Level-3 log Chl-a', size=14)
 
     im1 = axes[0, 1].imshow(flag, extent=extent, origin='upper',
@@ -148,8 +156,8 @@ def plot_prediction_observed(
     axes[0, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 1].set_box_aspect((extent[3] - extent[2]) / (extent[1] - extent[0]))
     axes[0, 1].set_xlabel('longitude'); axes[0, 1].set_ylabel('latitude')
-    axes[0, 1].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
-    axes[0, 1].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
+    axes[0, 1].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
+    axes[0, 1].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
     axes[0, 1].set_title('Land, Cloud, and Observed Flags After Applying Fake Cloud', size=13)
 
     im2 = axes[1, 0].imshow(predicted_CHL, vmin=vmin, vmax=vmax, extent=extent,
@@ -160,8 +168,8 @@ def plot_prediction_observed(
     axes[1, 0].imshow(np.where(flag == 1, np.nan, flag), vmax=2, vmin=0,
                       extent=extent, origin='upper', interpolation='nearest', alpha=1)
     axes[1, 0].set_xlabel('longitude'); axes[1, 0].set_ylabel('latitude')
-    axes[1, 0].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
-    axes[1, 0].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
+    axes[1, 0].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
+    axes[1, 0].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
     axes[1, 0].set_title('Predicted log Chl-a from U-Net', size=14)
 
     vmin2, vmax2 = -1, 1
@@ -172,8 +180,8 @@ def plot_prediction_observed(
     axes[1, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 1].set_box_aspect((extent[3] - extent[2]) / (extent[1] - extent[0]))
     axes[1, 1].set_xlabel('longitude'); axes[1, 1].set_ylabel('latitude')
-    axes[1, 1].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
-    axes[1, 1].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
+    axes[1, 1].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
+    axes[1, 1].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
     # (Optional) show quick metrics using utils helpers
     mae = compute_mae(true_CHL, predicted_CHL)
     mse = compute_mse(true_CHL, predicted_CHL)
@@ -240,7 +248,7 @@ def plot_prediction_gapfill(
     - This function expects a module-level variable ``datadir`` to be defined, pointing to the
       directory where ``{zarr_label}.npy`` lives.
     - Unstandardization is performed via ``utils.unstdize``.
-    - The map extent is currently fixed to ``[42, 101.75, -11.75, 32]`` (Arab Sea).
+    - The map extent and tick marks are derived from the ``zarr_stdized`` coordinates.
 
     Example
     -------
@@ -301,16 +309,17 @@ def plot_prediction_gapfill(
     axes[0, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 0].set_xlabel('longitude')
     axes[0, 0].set_ylabel('latitude')
-    axes[0, 0].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
-    axes[0, 0].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
+    lon_ticks, lat_ticks = _map_ticks(extent)
+    axes[0, 0].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
+    axes[0, 0].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
     axes[0, 0].set_title('Log Chl-a from the Gapfree \nLevel-4 GlobColour Copernicus Product', size=14)
     
     im1 = axes[0, 1].imshow(predicted_CHL, extent=extent, origin='upper', transform=ccrs.PlateCarree())
     axes[0, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 1].set_xlabel('longitude')
     axes[0, 1].set_ylabel('latitude')
-    axes[0, 1].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
-    axes[0, 1].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
+    axes[0, 1].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
+    axes[0, 1].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
     axes[0, 1].set_title('Gapfree log Chl-a from U-Net', size=14)
     
     vmax2 = 1
@@ -319,16 +328,16 @@ def plot_prediction_gapfill(
     axes[1, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 0].set_xlabel('longitude')
     axes[1, 0].set_ylabel('latitude')
-    axes[1, 0].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
-    axes[1, 0].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
+    axes[1, 0].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
+    axes[1, 0].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
     axes[1, 0].set_title('Difference Between log Copernicus Product\nand log U-Net Prediction (log Copernicus - log U-Net)', size=13)
 
     im3 = axes[1, 1].imshow(diff, vmin=vmin2, vmax=vmax2, extent=extent, origin='upper', transform=ccrs.PlateCarree(), cmap=plt.cm.RdBu)
     axes[1, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 1].set_xlabel('longitude')
     axes[1, 1].set_ylabel('latitude')
-    axes[1, 1].set_xticks(np.arange(42, 102, 10), crs=ccrs.PlateCarree())
-    axes[1, 1].set_yticks(np.arange(-12, 32, 5), crs=ccrs.PlateCarree())
+    axes[1, 1].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
+    axes[1, 1].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
     axes[1, 1].set_title('Absolute Difference Between Copernicus Product\nand U-Net Predictions (Copernicus - U-Net)', size=13)
 
     fig.subplots_adjust(right=0.85)

@@ -19,6 +19,8 @@ class _DummyAxis:
         self.imshow_calls = []
         self.set_extent_calls = []
         self.set_box_aspect_calls = []
+        self.set_xticks_calls = []
+        self.set_yticks_calls = []
 
     def imshow(self, *args, **kwargs):
         self.imshow_calls.append(kwargs)
@@ -42,9 +44,11 @@ class _DummyAxis:
         return None
 
     def set_xticks(self, *args, **kwargs):
+        self.set_xticks_calls.append((args, kwargs))
         return None
 
     def set_yticks(self, *args, **kwargs):
+        self.set_yticks_calls.append((args, kwargs))
         return None
 
     def set_title(self, *args, **kwargs):
@@ -111,3 +115,5 @@ def test_plot_prediction_observed_uses_coordinate_extent(monkeypatch, tmp_path):
     assert axes[0, 1].set_extent_calls[0][0][0] == expected_extent
     assert axes[0, 0].set_box_aspect_calls[0][0][0] == 0.75
     assert axes[0, 1].set_box_aspect_calls[0][0][0] == 0.75
+    assert np.all((axes[0, 0].set_xticks_calls[0][0][0] >= expected_extent[0]) & (axes[0, 0].set_xticks_calls[0][0][0] <= expected_extent[1]))
+    assert np.all((axes[0, 0].set_yticks_calls[0][0][0] >= expected_extent[2]) & (axes[0, 0].set_yticks_calls[0][0][0] <= expected_extent[3]))
