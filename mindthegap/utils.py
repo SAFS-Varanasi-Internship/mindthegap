@@ -276,7 +276,7 @@ IO_ZARR_STATS = {
 #IO_ZARR_STATS = None
 
 
-def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False, output_chunks=None):
+def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False, output_chunks=None, stats=None):
     """
     Lazy, on-the-fly equivalent of `create_zarr.data_preprocessing` that returns a
     dask-backed standardized ``xr.Dataset`` instead of writing a Zarr store.
@@ -315,6 +315,15 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
         train-window mean/std from the data (no eager read). Only valid for the IO.zarr
         Arabian Sea config the constants were captured for. Raises if ``IO_ZARR_STATS`` is
         not populated.
+    output_chunks : dict or None, default None
+        Dask chunking for the returned dataset. ``None`` keeps the default
+        ``{"time": 100, "lat": -1, "lon": -1}``. Pass e.g. ``{"time": 100, "lat": 40, "lon": 56}``
+        to align the output chunks with spatial patches so xbatcher reads line up on disk.
+    stats : dict or None, default None
+        If given, use these stats instead of computing or hardcoding them (no eager read).
+        Must be shaped like the returned ``stats`` (``{'feat_stats': {name: [mean, std], ...},
+        'CHL': [mean, std]}``). Lets several runs share one computed stats object so they
+        standardize identically. Takes precedence over ``use_hardcoded_stats``.
 
     Returns
     -------
@@ -381,9 +390,13 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL']
     cat_var_names = ['land_flag', 'real_cloud_flag', 'valid_CHL_flag', 'fake_cloud_flag']
 
-    # Numerical-predictor mean/std: either the precomputed IO.zarr constants (no data read)
-    # or the train-window stats computed once from the data.
-    if use_hardcoded_stats:
+    # Numerical-predictor mean/std: a passed-in stats dict (shared across runs, no data read),
+    # the precomputed IO.zarr constants, or the train-window stats computed once from the data.
+    if stats is not None:
+        feat_stats = stats['feat_stats']
+        feat_mean = [feat_stats[name][0] for name in numer_var_names]
+        feat_stdev = [feat_stats[name][1] for name in numer_var_names]
+    elif use_hardcoded_stats:
         if IO_ZARR_STATS is None:
             raise ValueError(
                 "IO_ZARR_STATS is not populated. Call build_standardized_lazy(..., "
@@ -409,9 +422,11 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
         for feature, mean, stdev in zip(numer_features, feat_mean, feat_stdev)
     ]
 
-    # CHL label: standardize only if asked; hardcoded or all-time stats, otherwise leave as log CHL
+    # CHL label: standardize only if asked; passed-in, hardcoded, or all-time stats, else leave as log CHL
     if standardize_chl:
-        if use_hardcoded_stats:
+        if stats is not None:
+            CHL_mean, CHL_stdev = stats['CHL']
+        elif use_hardcoded_stats:
             CHL_mean, CHL_stdev = IO_ZARR_STATS['CHL']
         else:
             CHL_mean = da.nanmean(CHL_data).compute()
