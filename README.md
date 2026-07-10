@@ -59,8 +59,45 @@ flowchart TB
 ```
 
 Functions are in `mindthegap` directory. Notebooks are in the `book` directory.
-```
+```python
 import mindthegap as mtg
+```
+
+## Model Bundle Workflow
+
+To ensure reproducible gap-filling, we use **model bundles** that package trained models with all necessary metadata:
+
+```python
+# After training (see book/2-U-Net_Fit.ipynb)
+bundle = mtg.save_model_bundle(
+    model=model,
+    bundle_path="models/arabsea_2015",
+    stats=stats,
+    metadata={"region": "Arabian Sea", "train_year": 2015},
+    history=history
+)
+
+# Load for prediction
+bundle = mtg.load_model_bundle("models/arabsea_2015")
+model = bundle.model
+stats = bundle.stats
+```
+
+A bundle contains:
+- `model.keras` - Trained TensorFlow model
+- `stats.json` - Standardization statistics (mean, stdev)
+- `metadata.json` - Training configuration and provenance
+- `history.json` - Training history (optional)
+
+See `book/5-Model_Bundle_Example.ipynb` for complete examples.
+
+**CLI Tools:**
+```bash
+# List all model bundles
+python -m mindthegap.cli list models/
+
+# Show bundle information
+python -m mindthegap.cli info models/arabsea_2015
 ```
 
 ## Collaborators

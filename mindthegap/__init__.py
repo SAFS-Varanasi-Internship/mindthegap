@@ -10,6 +10,11 @@ from .utils import (
     make_xbatcher,
     UNet,
 )
+from .model_bundle import (
+    ModelBundle,
+    save_model_bundle,
+    load_model_bundle,
+)
 # Expose the viz module as a submodule (lazy import by users)
 from . import viz  # users can do: from mindthegap import viz; viz.plot_prediction_observed(...)
 
@@ -24,5 +29,8 @@ __all__ = [
     "build_standardized_lazy",
     "make_xbatcher",
     "UNet",
+    "ModelBundle",
+    "save_model_bundle",
+    "load_model_bundle",
     "viz",
 ]
