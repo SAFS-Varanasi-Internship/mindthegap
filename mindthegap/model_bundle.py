@@ -86,7 +86,7 @@ class ModelBundle:
         metadata: Optional[Dict[str, Any]] = None,
         history: Optional[Any] = None,
         overwrite: bool = False,
-        ds_standardized: Optional[Any] = None,
+        ds_train: Optional[Any] = None,
     ) -> "ModelBundle":
         """
         Save a model bundle to disk.
@@ -107,15 +107,19 @@ class ModelBundle:
         stats : dict
             Standardization statistics from build_standardized_lazy().
             Should contain 'CHL', 'masked_CHL', and 'feat_stats' keys.
+            Note: If no standardization was applied, stats may contain
+            identity values (mean=0, std=1).
         metadata : dict, optional
             Additional metadata (region, dates, config, etc.). If None, creates minimal metadata.
         history : tf.keras.callbacks.History or dict, optional
             Training history from model.fit(). Can be the History object or dict.
         overwrite : bool, default False
             If True, overwrite existing bundle. If False, raise error if bundle exists.
-        ds_standardized : xr.Dataset, optional
-            The standardized dataset from build_standardized_lazy(). If provided,
-            automatically extracts variable names and order for reproducibility.
+        ds_train : xr.Dataset, optional
+            The training dataset structure (standardized or not) used with the model.
+            If provided, automatically extracts variable names and order for reproducibility.
+            This is the dataset structure used for training - what matters is the variables
+            and their order, not whether standardization was applied.
         
         Returns
         -------
@@ -146,15 +150,15 @@ class ModelBundle:
         ...     history=history
         ... )
         >>> 
-        >>> # Recommended: Pass ds_standardized to auto-capture variable order
+        >>> # Recommended: Pass ds_train to auto-capture variable order
         >>> # REQUIRED: Specify target_variable in metadata
         >>> bundle = ModelBundle.save(
         ...     model=model,
         ...     bundle_path="models/arabsea_2015",
         ...     stats=stats,
-        ...     ds_standardized=ds_standardized,
+        ...     ds_train=ds_train,  # Training dataset structure (standardized or not)
         ...     metadata={
-        ...         "target_variable": "CHL",  # REQUIRED when using ds_standardized
+        ...         "target_variable": "CHL",  # REQUIRED when using ds_train
         ...         "region": "Arabian Sea"
         ...     },
         ...     history=history
@@ -195,15 +199,15 @@ class ModelBundle:
         metadata.setdefault("bundle_version", "1.0")
         metadata.setdefault("model_name", model.name if hasattr(model, 'name') else "unet")
         
-        # Extract input variables from ds_standardized if provided
-        if ds_standardized is not None:
+        # Extract input variables from ds_train if provided
+        if ds_train is not None:
             try:
-                all_vars = list(ds_standardized.data_vars.keys())
+                all_vars = list(ds_train.data_vars.keys())
                 
                 # Target variable must be explicitly specified in metadata
                 if not metadata or 'target_variable' not in metadata:
                     raise ValueError(
-                        "When ds_standardized is provided, metadata['target_variable'] must be specified. "
+                        "When ds_train is provided, metadata['target_variable'] must be specified. "
                         "For example: metadata={'target_variable': 'CHL', 'region': 'Arabian Sea'}"
                     )
                 
@@ -212,7 +216,7 @@ class ModelBundle:
                 # Validate that target exists in dataset
                 if target_var not in all_vars:
                     raise ValueError(
-                        f"Target variable '{target_var}' not found in ds_standardized. "
+                        f"Target variable '{target_var}' not found in ds_train. "
                         f"Available variables: {all_vars}"
                     )
                 
@@ -228,7 +232,7 @@ class ModelBundle:
                 raise  # Re-raise validation errors
             except Exception as e:
                 raise ValueError(
-                    f"Failed to extract variables from ds_standardized: {e}"
+                    f"Failed to extract variables from ds_train: {e}"
                 )
         
         # Add model architecture summary
@@ -486,7 +490,7 @@ def save_model_bundle(
     metadata: Optional[Dict[str, Any]] = None,
     history: Optional[Any] = None,
     overwrite: bool = False,
-    ds_standardized: Optional[Any] = None,
+    ds_train: Optional[Any] = None,
 ) -> ModelBundle:
     """
     Save a model bundle. Convenience wrapper for ModelBundle.save().
@@ -500,7 +504,7 @@ def save_model_bundle(
         metadata=metadata,
         history=history,
         overwrite=overwrite,
-        ds_standardized=ds_standardized,
+        ds_train=ds_train,
     )
 
 
