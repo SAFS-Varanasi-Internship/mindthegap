@@ -472,7 +472,7 @@ def overall_perf(ds_std, model, mean, std, train_times=None, freq="D", kind="lin
 
 
 def spatial_perf(ds_std, model, mean, std, groupby=None, target="CHL",
-                 mask_flag="fake_cloud_flag", block=100, plot=True):
+                 mask_flag="fake_cloud_flag", block=100, plot=True, vmax=None, cmap="viridis"):
     """Per-pixel gap-fill error map: mean ``|prediction - truth|`` at fake-cloud pixels over time.
 
     Shows *where* the model reconstructs cloud gaps well or badly. ``groupby="month"`` returns a
@@ -486,6 +486,11 @@ def spatial_perf(ds_std, model, mean, std, groupby=None, target="CHL",
         As in :func:`overall_perf`.
     plot : bool
         Draw the map(s) as well as returning them.
+    vmax : float or None
+        Upper color limit, shared across all panels. None uses the 99th percentile of the data so a
+        few very-high-error pixels do not wash out the rest (lower it for more contrast). vmin is 0.
+    cmap : str
+        Matplotlib colormap name.
 
     Returns
     -------
@@ -527,19 +532,24 @@ def spatial_perf(ds_std, model, mean, std, groupby=None, target="CHL",
 
     if plot:
         extent = _map_extent(ds_std)
+        hi = vmax
+        if hi is None:                                  # robust default: cap at the 99th percentile
+            finite = da.values[np.isfinite(da.values)]
+            hi = float(np.percentile(finite, 99)) if finite.size else None
         if groupby == "month":
             fig, axes = plt.subplots(3, 4, figsize=(14, 8),
                                      subplot_kw={"projection": ccrs.PlateCarree()})
             im = None
             for mo, ax in zip(range(1, 13), axes.ravel()):
-                im = ax.imshow(da.sel(month=mo).values, extent=extent, origin="upper",
+                im = ax.imshow(da.sel(month=mo).values, vmin=0, vmax=hi, cmap=cmap,
+                               extent=extent, origin="upper",
                                transform=ccrs.PlateCarree(), interpolation="nearest")
                 ax.add_feature(cfeature.COASTLINE, linewidth=0.4)
                 ax.set_title(f"month {mo}", size=9)
             fig.colorbar(im, ax=axes.ravel().tolist(), fraction=0.02, label="MAE")
         else:
             fig, ax = plt.subplots(figsize=(7, 5), subplot_kw={"projection": ccrs.PlateCarree()})
-            im = ax.imshow(da.values, extent=extent, origin="upper",
+            im = ax.imshow(da.values, vmin=0, vmax=hi, cmap=cmap, extent=extent, origin="upper",
                            transform=ccrs.PlateCarree(), interpolation="nearest")
             ax.add_feature(cfeature.COASTLINE, linewidth=0.4)
             fig.colorbar(im, ax=ax, label="MAE")
