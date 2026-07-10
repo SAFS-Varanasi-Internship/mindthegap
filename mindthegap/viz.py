@@ -42,16 +42,16 @@ def _map_ticks(extent, step=5):
 
 def plot_prediction_observed(
     zarr_stdized,
-    zarr_label, 
     model, 
     date_to_predict,
-    datadir: Union[str, Path] = "data",
+    meanCHL=0,
+    stdCHL=1
 ):
     """
     Plot observed vs. predicted log(Chl-a) for a single date, along with flags and differences.
 
     This function:
-      1) loads mean/std used during standardization from ``{datadir}/{zarr_label}.npy``,
+      1) uses a user specified mean/std for CHL that was used for training. This can be found in ``{datadir}/{zarr_label}.npy``,
       2) builds a predictor tensor X for the requested date from all variables in ``zarr_stdized``
          except ``"CHL"``, filling NaNs with 0.0,
       4) runs the model to produce standardized predictions, then unstandardizes back to log-scale
@@ -64,22 +64,13 @@ def plot_prediction_observed(
     zarr_stdized : xarray.Dataset
         Dataset containing standardized predictors (and flags) for the model input. Must include
         the variables used by the model as well as ``'CHL'`` (which is removed from X).
-    zarr_label : str
-        Label used to locate the standardization sidecar file ``{datadir}/{zarr_label}.npy``
-        containing ``{'CHL': array([mean, std]), 'masked_CHL': ...}``.
     model : tf.keras.Model
         Trained U-Net (or compatible) model expecting input shaped (H, W, C) and returning
         a single-channel prediction of standardized log(Chl-a).
     date_to_predict : str or numpy.datetime64 or pandas.Timestamp
         Date to visualize; must match the ``time`` coordinate in ``zarr_stdized`` and ``zarr_ds``.
+    meanCHL, stdCHL : the values to unstandardize the predictions back to the observed scale for display and MAE calculations
 
-    Notes
-    -----
-    - This function expects the following globals to exist in the module scope:
-        * ``datadir``: directory where ``{zarr_label}.npy`` lives,
-    - Predictions are unstandardized with :func:`utils.unstdize`.
-    - The map extent and tick marks are derived from the ``zarr_stdized`` coordinates so the
-      raster fills the panel without distortion.
 
     See Also
     --------
@@ -89,11 +80,11 @@ def plot_prediction_observed(
 
     Example
     -------
-    >>> plot_prediction_observed(zarr_stdized, zarr_label="2015_3_ArabSea_full_2days",
+    >>> plot_prediction_observed(zarr_stdized, 
     ...                          model=unet_model, date_to_predict="2015-03-15")
     """
-    mean_std = np.load(f'{datadir}/{zarr_label}.npy', allow_pickle='TRUE').item()
-    mean, std = mean_std['CHL'][0], mean_std['CHL'][1]
+    mean = meanCHL
+    std = stdCHL
 
     zarr_date = zarr_stdized.sel(time=date_to_predict)
 
@@ -225,7 +216,7 @@ def plot_prediction_observed(
     cbar1_ax = fig.add_axes([0.79, 0.14, 0.025, 0.72]); fig.colorbar(im0, cax=cbar1_ax).ax.set_ylabel(
         'log Chl-a (mg/m-3)', rotation=270, size=14, labelpad=16)
     cbar2_ax = fig.add_axes([0.86, 0.14, 0.025, 0.72]); fig.colorbar(im1, cax=cbar2_ax).ax.set_ylabel(
-        'land & real cloud = 0, fake cloud = 1, observed after masking = 2', rotation=270, size=14, labelpad=20)
+        'cloud, unobserved = white, masked observed = teal, unmasked observed = yellow', rotation=270, size=14, labelpad=20)
     cbar3_ax = fig.add_axes([0.94, 0.14, 0.025, 0.72]); fig.colorbar(im3, cax=cbar3_ax).ax.set_ylabel(
         'difference in log Chl-a', rotation=270, size=14, labelpad=16)
 
