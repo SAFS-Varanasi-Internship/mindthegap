@@ -86,6 +86,7 @@ class ModelBundle:
         metadata: Optional[Dict[str, Any]] = None,
         history: Optional[Any] = None,
         overwrite: bool = False,
+        ds_standardized: Optional[Any] = None,
     ) -> "ModelBundle":
         """
         Save a model bundle to disk.
@@ -112,6 +113,9 @@ class ModelBundle:
             Training history from model.fit(). Can be the History object or dict.
         overwrite : bool, default False
             If True, overwrite existing bundle. If False, raise error if bundle exists.
+        ds_standardized : xr.Dataset, optional
+            The standardized dataset from build_standardized_lazy(). If provided,
+            automatically extracts variable names and order for reproducibility.
         
         Returns
         -------
@@ -127,6 +131,7 @@ class ModelBundle:
         
         Examples
         --------
+        >>> # Basic usage
         >>> bundle = ModelBundle.save(
         ...     model=model,
         ...     bundle_path="models/arabsea_2015",
@@ -138,6 +143,16 @@ class ModelBundle:
         ...         "patch_size": (40, 56),
         ...         "zarr_source": "gcs://nmfs_odp_nwfsc/CB/mind_the_chl_gap/IO.zarr"
         ...     },
+        ...     history=history
+        ... )
+        >>> 
+        >>> # Recommended: Pass ds_standardized to auto-capture variable order
+        >>> bundle = ModelBundle.save(
+        ...     model=model,
+        ...     bundle_path="models/arabsea_2015",
+        ...     stats=stats,
+        ...     ds_standardized=ds_standardized,  # Auto-captures input variables
+        ...     metadata={"region": "Arabian Sea"},
         ...     history=history
         ... )
         """
@@ -175,6 +190,21 @@ class ModelBundle:
         # Add bundle version and model info
         metadata.setdefault("bundle_version", "1.0")
         metadata.setdefault("model_name", model.name if hasattr(model, 'name') else "unet")
+        
+        # Extract input variables from ds_standardized if provided
+        if ds_standardized is not None:
+            try:
+                all_vars = list(ds_standardized.data_vars.keys())
+                # Input variables are everything except CHL (the target)
+                input_vars = [v for v in all_vars if v != 'CHL']
+                metadata["input_variables"] = input_vars
+                metadata["target_variable"] = "CHL"
+                metadata["n_input_channels"] = len(input_vars)
+                
+                # Also store all variable names for reference
+                metadata["all_variables"] = all_vars
+            except Exception:
+                pass  # Not critical if we can't extract variables
         
         # Add model architecture summary
         try:
@@ -431,6 +461,7 @@ def save_model_bundle(
     metadata: Optional[Dict[str, Any]] = None,
     history: Optional[Any] = None,
     overwrite: bool = False,
+    ds_standardized: Optional[Any] = None,
 ) -> ModelBundle:
     """
     Save a model bundle. Convenience wrapper for ModelBundle.save().
@@ -444,6 +475,7 @@ def save_model_bundle(
         metadata=metadata,
         history=history,
         overwrite=overwrite,
+        ds_standardized=ds_standardized,
     )
 
 
