@@ -195,10 +195,24 @@ class ModelBundle:
         if ds_standardized is not None:
             try:
                 all_vars = list(ds_standardized.data_vars.keys())
-                # Input variables are everything except CHL (the target)
-                input_vars = [v for v in all_vars if v != 'CHL']
+                
+                # Determine target variable - look for common names
+                # Priority: user-specified in metadata, then 'CHL', then last variable
+                target_var = None
+                if metadata and 'target_variable' in metadata:
+                    target_var = metadata['target_variable']
+                elif 'CHL' in all_vars:
+                    target_var = 'CHL'
+                else:
+                    # Heuristic: assume last variable is the target
+                    # This is a fallback and may not always be correct
+                    target_var = all_vars[-1]
+                
+                # Input variables are everything except the target
+                input_vars = [v for v in all_vars if v != target_var]
+                
                 metadata["input_variables"] = input_vars
-                metadata["target_variable"] = "CHL"
+                metadata["target_variable"] = target_var
                 metadata["n_input_channels"] = len(input_vars)
                 
                 # Also store all variable names for reference
