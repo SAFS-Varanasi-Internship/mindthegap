@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 import numpy as np
+import xarray as xr
 
 
 class ModelBundle:
@@ -66,16 +67,54 @@ class ModelBundle:
             Standardization statistics with keys 'CHL', 'masked_CHL', 'feat_stats'.
         metadata : dict
             Training configuration and provenance information.
+            Must contain 'target_variable' and 'input_variables' keys.
         history : dict, optional
             Training history from model.fit().
         bundle_path : str or Path, optional
             Path where the bundle is stored (if loaded from disk).
+        
+        Raises
+        ------
+        ValueError
+            If metadata is missing required keys 'target_variable' or 'input_variables'.
         """
+        # Validate required metadata fields
+        if 'target_variable' not in metadata:
+            raise ValueError(
+                "metadata must contain 'target_variable' key. "
+                "This should be set automatically when using save() with ds_train parameter."
+            )
+        if 'train_variables' not in metadata:
+            raise ValueError(
+                "metadata must contain 'train_variables' key. "
+                "This should be set automatically when using save() with ds_train parameter."
+            )
+        
         self.model = model
         self.stats = stats
         self.metadata = metadata
         self.history = history
         self.bundle_path = Path(bundle_path) if bundle_path else None
+    
+    @property
+    def target_variable(self) -> str:
+        """The target variable name (e.g., 'CHL')."""
+        return self.metadata['target_variable']
+    
+    @property
+    def input_variables(self) -> list:
+        """List of input variable names in order."""
+        return self.metadata['input_variables']
+    
+    @property
+    def train_variables(self) -> list:
+        """
+        List of all variable names in the order they appeared in the training dataset.
+        
+        Use this to select and order variables from your dataset:
+            user_ds[bundle.train_variables]
+        """
+        return self.metadata['train_variables']
     
     @classmethod
     def save(
@@ -83,59 +122,79 @@ class ModelBundle:
         model: Any,
         bundle_path: Union[str, Path],
         stats: Dict[str, Any],
+        ds_train: xr.Dataset,
         metadata: Optional[Dict[str, Any]] = None,
         history: Optional[Any] = None,
         overwrite: bool = False,
-        ds_train: Optional[Any] = None,
+        save_optimizer: bool = False,
+            model_format: str = "h5",
     ) -> "ModelBundle":
-        """
-        Save a model bundle to disk.
+            """
+            Save a model bundle to disk.
         
-        Creates a directory structure:
-        bundle_path/
-            model.keras         # TensorFlow model
-            stats.json          # Standardization statistics
-            metadata.json       # Configuration and provenance
-            history.json        # Training history (optional)
+            Creates a directory structure:
+            bundle_path/
+                model.keras or model.h5  # TensorFlow model
+                stats.json               # Standardization statistics
+                metadata.json            # Configuration and provenance
+                history.json             # Training history (optional)
         
-        Parameters
-        ----------
-        model : tf.keras.Model
-            Trained Keras model to save.
-        bundle_path : str or Path
-            Directory path where the bundle will be saved (created if needed).
-        stats : dict
-            Standardization statistics from build_standardized_lazy().
-            Should contain 'CHL', 'masked_CHL', and 'feat_stats' keys.
-            Note: If no standardization was applied, stats may contain
-            identity values (mean=0, std=1).
-        metadata : dict, optional
-            Additional metadata (region, dates, config, etc.). If None, creates minimal metadata.
-        history : tf.keras.callbacks.History or dict, optional
-            Training history from model.fit(). Can be the History object or dict.
-        overwrite : bool, default False
-            If True, overwrite existing bundle. If False, raise error if bundle exists.
-        ds_train : xr.Dataset, optional
-            The training dataset structure (standardized or not) used with the model.
-            If provided, automatically extracts variable names and order for reproducibility.
-            This is the dataset structure used for training - what matters is the variables
-            and their order, not whether standardization was applied.
+            Parameters
+            ----------
+            model : tf.keras.Model
+                Trained Keras model to save.
+            bundle_path : str or Path
+                Directory path where the bundle will be saved (created if needed).
+            stats : dict
+                Standardization statistics from build_standardized_lazy().
+                Should contain 'CHL', 'masked_CHL', and 'feat_stats' keys.
+                Note: If no standardization was applied, stats may contain
+                identity values (mean=0, std=1).
+            ds_train : xr.Dataset
+                The training dataset structure (standardized or not) used with the model.
+                Automatically extracts variable names and order for reproducibility.
+                This is the dataset structure used for training - what matters is the variables
+                and their order, not whether standardization was applied.
+            metadata : dict, optional
+                Additional metadata (region, dates, config, etc.). If None, creates minimal metadata.
+            history : tf.keras.callbacks.History or dict, optional
+                Training history from model.fit(). Can be the History object or dict.
+            overwrite : bool, default False
+                If True, overwrite existing bundle. If False, raise error if bundle exists.
+            save_optimizer : bool, default False
+                If True, include optimizer state in saved model. 
+                Note: Only works with 'h5' format. The 'keras' format always includes optimizer.
+                Including optimizer increases file size ~3x (e.g., 8MB -> 25MB).
+            model_format : str, default "h5"
+                Format to save the model: "h5" or "keras".
+                - "h5": Legacy HDF5 format. Smaller when save_optimizer=False (~8MB).
+                - "keras": Native Keras format. Always includes optimizer (~25MB).
+                Recommendation: Use "h5" with save_optimizer=False for distribution.
         
-        Returns
-        -------
-        ModelBundle
-            The saved bundle instance.
+            Returns
+            -------
+            ModelBundle
+                The saved bundle instance.
         
-        Raises
-        ------
-        FileExistsError
-            If bundle_path exists and overwrite=False.
-        ValueError
-            If stats is missing required keys.
+            Raises
+            ------
+            FileExistsError
+                If bundle_path exists and overwrite=False.
+            ValueError
+                If stats is missing required keys or model_format is invalid.
         
-        Examples
-        --------
-        >>> # Basic usage without variable capture
+            Examples
+            --------
+            >>> # Recommended: Small file size for distribution/inference
+            >>> bundle = ModelBundle.save(
+            ...     model=model,
+            ...     bundle_path="models/arabsea_2015",
+            ...     stats=stats,
+            ...     ds_train=ds_train,
+            ...     metadata={"target_variable": "CHL", "region": "Arabian Sea"},
+            ...     model_format="h5",  # Default
+            ...     save_optimizer=False  # Default - saves ~8MB
+            ... )
         >>> bundle = ModelBundle.save(
         ...     model=model,
         ...     bundle_path="models/arabsea_2015",
@@ -179,12 +238,23 @@ class ModelBundle:
                 f"stats must contain keys {required_keys}, got {set(stats.keys())}"
             )
         
+        # Validate model format
+        if model_format not in ["h5", "keras"]:
+            raise ValueError(
+                f"model_format must be 'h5' or 'keras', got '{model_format}'"
+            )
+        
         # Create directory
         bundle_path.mkdir(parents=True, exist_ok=True)
         
-        # Save model
-        model_file = bundle_path / "model.keras"
-        model.save(str(model_file))
+        # Save model with appropriate format
+        if model_format == "h5":
+            model_file = bundle_path / "model.h5"
+            model.save(str(model_file), include_optimizer=save_optimizer)
+        else:  # keras format
+            model_file = bundle_path / "model.keras"
+            # Note: .keras format always includes optimizer regardless of flag
+            model.save(str(model_file), include_optimizer=save_optimizer)
         
         # Save stats (convert numpy arrays to lists for JSON)
         stats_serializable = _make_json_serializable(stats)
@@ -199,37 +269,36 @@ class ModelBundle:
         metadata.setdefault("bundle_version", "1.0")
         metadata.setdefault("model_name", model.name if hasattr(model, 'name') else "unet")
         
-        # Extract input variables from ds_train if provided
-        if ds_train is not None:
-            try:
-                all_vars = list(ds_train.data_vars.keys())
-                
-                # Target variable must be explicitly specified in metadata
-                if not metadata or 'target_variable' not in metadata:
-                    raise ValueError(
-                        "When ds_train is provided, metadata['target_variable'] must be specified. "
-                        "For example: metadata={'target_variable': 'CHL', 'region': 'Arabian Sea'}"
-                    )
-                
-                target_var = metadata['target_variable']
-                
-                # Validate that target exists in dataset
-                if target_var not in all_vars:
-                    raise ValueError(
-                        f"Target variable '{target_var}' not found in ds_train. "
-                        f"Available variables: {all_vars}"
-                    )
-                
-                # Input variables are everything except the target
-                input_vars = [v for v in all_vars if v != target_var]
-                
-                metadata["input_variables"] = input_vars
-                metadata["n_input_channels"] = len(input_vars)
-                
-                # Also store all variable names for reference
-                metadata["all_variables"] = all_vars
-            except ValueError:
-                raise  # Re-raise validation errors
+        # Extract variables from ds_train
+        try:
+            # Store all variables in the exact order from ds_train
+            train_variables = list(ds_train.data_vars.keys())
+            
+            # Target variable must be explicitly specified in metadata
+            if not metadata or 'target_variable' not in metadata:
+                raise ValueError(
+                    "metadata['target_variable'] must be specified. "
+                    "For example: metadata={'target_variable': 'CHL', 'region': 'Arabian Sea'}"
+                )
+            
+            target_var = metadata['target_variable']
+            
+            # Validate that target exists in dataset
+            if target_var not in train_variables:
+                raise ValueError(
+                    f"Target variable '{target_var}' not found in ds_train. "
+                    f"Available variables: {train_variables}"
+                )
+            
+            # Store the complete ordered list of variables from training
+            metadata["train_variables"] = train_variables
+            
+            # Input variables are everything except the target (for reference)
+            input_vars = [v for v in train_variables if v != target_var]
+            metadata["input_variables"] = input_vars
+            metadata["n_input_channels"] = len(input_vars)
+        except ValueError:
+            raise  # Re-raise validation errors
             except Exception as e:
                 raise ValueError(
                     f"Failed to extract variables from ds_train: {e}"
@@ -348,11 +417,20 @@ class ModelBundle:
             if not bundle_path.exists():
                 raise FileNotFoundError(f"Bundle not found at {bundle_path}")
         
-        # Load model
-        model_file = bundle_path / "model.keras"
-        if not model_file.exists():
-            raise FileNotFoundError(f"Model file not found: {model_file}")
-        model = tf.keras.models.load_model(str(model_file))
+        # Load model (try both formats)
+        model_file_keras = bundle_path / "model.keras"
+        model_file_h5 = bundle_path / "model.h5"
+        
+        if model_file_h5.exists():
+            model = tf.keras.models.load_model(str(model_file_h5))
+        elif model_file_keras.exists():
+            model = tf.keras.models.load_model(str(model_file_keras))
+        else:
+            raise FileNotFoundError(
+                f"Model file not found. Expected either:\n"
+                f"  - {model_file_h5}\n"
+                f"  - {model_file_keras}"
+            )
         
         # Load stats
         stats_file = bundle_path / "stats.json"
@@ -487,10 +565,12 @@ def save_model_bundle(
     model: Any,
     bundle_path: Union[str, Path],
     stats: Dict[str, Any],
+    ds_train: xr.Dataset,
     metadata: Optional[Dict[str, Any]] = None,
     history: Optional[Any] = None,
     overwrite: bool = False,
-    ds_train: Optional[Any] = None,
+    save_optimizer: bool = False,
+    model_format: str = "h5",
 ) -> ModelBundle:
     """
     Save a model bundle. Convenience wrapper for ModelBundle.save().
@@ -501,10 +581,12 @@ def save_model_bundle(
         model=model,
         bundle_path=bundle_path,
         stats=stats,
+        ds_train=ds_train,
         metadata=metadata,
         history=history,
         overwrite=overwrite,
-        ds_train=ds_train,
+        save_optimizer=save_optimizer,
+        model_format=model_format,
     )
 
 
