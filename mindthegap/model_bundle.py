@@ -131,7 +131,7 @@ class ModelBundle:
         
         Examples
         --------
-        >>> # Basic usage
+        >>> # Basic usage without variable capture
         >>> bundle = ModelBundle.save(
         ...     model=model,
         ...     bundle_path="models/arabsea_2015",
@@ -147,12 +147,16 @@ class ModelBundle:
         ... )
         >>> 
         >>> # Recommended: Pass ds_standardized to auto-capture variable order
+        >>> # REQUIRED: Specify target_variable in metadata
         >>> bundle = ModelBundle.save(
         ...     model=model,
         ...     bundle_path="models/arabsea_2015",
         ...     stats=stats,
-        ...     ds_standardized=ds_standardized,  # Auto-captures input variables
-        ...     metadata={"region": "Arabian Sea"},
+        ...     ds_standardized=ds_standardized,
+        ...     metadata={
+        ...         "target_variable": "CHL",  # REQUIRED when using ds_standardized
+        ...         "region": "Arabian Sea"
+        ...     },
         ...     history=history
         ... )
         """
@@ -196,29 +200,36 @@ class ModelBundle:
             try:
                 all_vars = list(ds_standardized.data_vars.keys())
                 
-                # Determine target variable - look for common names
-                # Priority: user-specified in metadata, then 'CHL', then last variable
-                target_var = None
-                if metadata and 'target_variable' in metadata:
-                    target_var = metadata['target_variable']
-                elif 'CHL' in all_vars:
-                    target_var = 'CHL'
-                else:
-                    # Heuristic: assume last variable is the target
-                    # This is a fallback and may not always be correct
-                    target_var = all_vars[-1]
+                # Target variable must be explicitly specified in metadata
+                if not metadata or 'target_variable' not in metadata:
+                    raise ValueError(
+                        "When ds_standardized is provided, metadata['target_variable'] must be specified. "
+                        "For example: metadata={'target_variable': 'CHL', 'region': 'Arabian Sea'}"
+                    )
+                
+                target_var = metadata['target_variable']
+                
+                # Validate that target exists in dataset
+                if target_var not in all_vars:
+                    raise ValueError(
+                        f"Target variable '{target_var}' not found in ds_standardized. "
+                        f"Available variables: {all_vars}"
+                    )
                 
                 # Input variables are everything except the target
                 input_vars = [v for v in all_vars if v != target_var]
                 
                 metadata["input_variables"] = input_vars
-                metadata["target_variable"] = target_var
                 metadata["n_input_channels"] = len(input_vars)
                 
                 # Also store all variable names for reference
                 metadata["all_variables"] = all_vars
-            except Exception:
-                pass  # Not critical if we can't extract variables
+            except ValueError:
+                raise  # Re-raise validation errors
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to extract variables from ds_standardized: {e}"
+                )
         
         # Add model architecture summary
         try:
