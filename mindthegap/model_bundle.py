@@ -127,98 +127,88 @@ class ModelBundle:
         history: Optional[Any] = None,
         overwrite: bool = False,
         save_optimizer: bool = False,
-            model_format: str = "h5",
+        model_format: str = "h5",
     ) -> "ModelBundle":
-            """
-            Save a model bundle to disk.
+        """
+        Save a model bundle to disk.
         
-            Creates a directory structure:
-            bundle_path/
-                model.keras or model.h5  # TensorFlow model
-                stats.json               # Standardization statistics
-                metadata.json            # Configuration and provenance
-                history.json             # Training history (optional)
+        Creates a directory structure:
+        bundle_path/
+            model.keras or model.h5  # TensorFlow model
+            stats.json               # Standardization statistics
+            metadata.json            # Configuration and provenance
+            history.json             # Training history (optional)
         
-            Parameters
-            ----------
-            model : tf.keras.Model
-                Trained Keras model to save.
-            bundle_path : str or Path
-                Directory path where the bundle will be saved (created if needed).
-            stats : dict
-                Standardization statistics from build_standardized_lazy().
-                Should contain 'CHL', 'masked_CHL', and 'feat_stats' keys.
-                Note: If no standardization was applied, stats may contain
-                identity values (mean=0, std=1).
-            ds_train : xr.Dataset
-                The training dataset structure (standardized or not) used with the model.
-                Automatically extracts variable names and order for reproducibility.
-                This is the dataset structure used for training - what matters is the variables
-                and their order, not whether standardization was applied.
-            metadata : dict, optional
-                Additional metadata (region, dates, config, etc.). If None, creates minimal metadata.
-            history : tf.keras.callbacks.History or dict, optional
-                Training history from model.fit(). Can be the History object or dict.
-            overwrite : bool, default False
-                If True, overwrite existing bundle. If False, raise error if bundle exists.
-            save_optimizer : bool, default False
-                If True, include optimizer state in saved model. 
-                Note: Only works with 'h5' format. The 'keras' format always includes optimizer.
-                Including optimizer increases file size ~3x (e.g., 8MB -> 25MB).
-            model_format : str, default "h5"
-                Format to save the model: "h5" or "keras".
-                - "h5": Legacy HDF5 format. Smaller when save_optimizer=False (~8MB).
-                - "keras": Native Keras format. Always includes optimizer (~25MB).
-                Recommendation: Use "h5" with save_optimizer=False for distribution.
+        Parameters
+        ----------
+        model : tf.keras.Model
+            Trained Keras model to save.
+        bundle_path : str or Path
+            Directory path where the bundle will be saved (created if needed).
+        stats : dict
+            Standardization statistics from build_standardized_lazy().
+            Should contain 'CHL', 'masked_CHL', and 'feat_stats' keys.
+            Note: If no standardization was applied, stats may contain
+            identity values (mean=0, std=1).
+        ds_train : xr.Dataset
+            The training dataset structure (standardized or not) used with the model.
+            Automatically extracts variable names and order for reproducibility.
+            This is the dataset structure used for training - what matters is the variables
+            and their order, not whether standardization was applied.
+        metadata : dict, optional
+            Additional metadata (region, dates, config, etc.). If None, creates minimal metadata.
+        history : tf.keras.callbacks.History or dict, optional
+            Training history from model.fit(). Can be the History object or dict.
+        overwrite : bool, default False
+            If True, overwrite existing bundle. If False, raise error if bundle exists.
+        save_optimizer : bool, default False
+            If True, include optimizer state in saved model. 
+            Note: Only works with 'h5' format. The 'keras' format always includes optimizer.
+            Including optimizer increases file size ~3x (e.g., 8MB -> 25MB).
+        model_format : str, default "h5"
+            Format to save the model: "h5" or "keras".
+            - "h5": Legacy HDF5 format. Smaller when save_optimizer=False (~8MB).
+            - "keras": Native Keras format. Always includes optimizer (~25MB).
+            Recommendation: Use "h5" with save_optimizer=False for distribution.
         
-            Returns
-            -------
-            ModelBundle
-                The saved bundle instance.
+        Returns
+        -------
+        ModelBundle
+            The saved bundle instance.
         
-            Raises
-            ------
-            FileExistsError
-                If bundle_path exists and overwrite=False.
-            ValueError
-                If stats is missing required keys or model_format is invalid.
+        Raises
+        ------
+        FileExistsError
+            If bundle_path exists and overwrite=False.
+        ValueError
+            If stats is missing required keys or model_format is invalid.
         
-            Examples
-            --------
-            >>> # Recommended: Small file size for distribution/inference
-            >>> bundle = ModelBundle.save(
-            ...     model=model,
-            ...     bundle_path="models/arabsea_2015",
-            ...     stats=stats,
-            ...     ds_train=ds_train,
-            ...     metadata={"target_variable": "CHL", "region": "Arabian Sea"},
-            ...     model_format="h5",  # Default
-            ...     save_optimizer=False  # Default - saves ~8MB
-            ... )
+        Examples
+        --------
+        >>> # Recommended: Small file size for distribution/inference
         >>> bundle = ModelBundle.save(
         ...     model=model,
         ...     bundle_path="models/arabsea_2015",
-        ...     stats=stats_dict,
+        ...     stats=stats,
+        ...     ds_train=ds_train,
+        ...     metadata={"target_variable": "CHL", "region": "Arabian Sea"},
+        ...     model_format="h5",  # Default
+        ...     save_optimizer=False  # Default - saves ~8MB
+        ... )
+        >>> 
+        >>> # With full training metadata
+        >>> bundle = ModelBundle.save(
+        ...     model=model,
+        ...     bundle_path="models/arabsea_2015",
+        ...     stats=stats,
+        ...     ds_train=ds_train,
         ...     metadata={
+        ...         "target_variable": "CHL",
         ...         "region": "Arabian Sea",
         ...         "train_year": 2015,
         ...         "train_range": 3,
         ...         "patch_size": (40, 56),
         ...         "zarr_source": "gcs://nmfs_odp_nwfsc/CB/mind_the_chl_gap/IO.zarr"
-        ...     },
-        ...     history=history
-        ... )
-        >>> 
-        >>> # Recommended: Pass ds_train to auto-capture variable order
-        >>> # REQUIRED: Specify target_variable in metadata
-        >>> bundle = ModelBundle.save(
-        ...     model=model,
-        ...     bundle_path="models/arabsea_2015",
-        ...     stats=stats,
-        ...     ds_train=ds_train,  # Training dataset structure (standardized or not)
-        ...     metadata={
-        ...         "target_variable": "CHL",  # REQUIRED when using ds_train
-        ...         "region": "Arabian Sea"
         ...     },
         ...     history=history
         ... )
@@ -299,10 +289,10 @@ class ModelBundle:
             metadata["n_input_channels"] = len(input_vars)
         except ValueError:
             raise  # Re-raise validation errors
-            except Exception as e:
-                raise ValueError(
-                    f"Failed to extract variables from ds_train: {e}"
-                )
+        except Exception as e:
+            raise ValueError(
+                f"Failed to extract variables from ds_train: {e}"
+            )
         
         # Add model architecture summary
         try:

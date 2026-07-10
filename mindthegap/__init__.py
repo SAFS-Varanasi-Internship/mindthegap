@@ -1,5 +1,5 @@
 # Re-export the primary functions (explicit, stable API)
-from .create_zarr import create_zarr, data_preprocessing
+from .create_zarr import create_zarr, data_preprocessing, data_preprocessing_new
 from .utils import (
     crop_to_multiple,
     unstdize,
@@ -21,6 +21,7 @@ from . import viz  # users can do: from mindthegap import viz; viz.plot_predicti
 __all__ = [
     "create_zarr",
     "data_preprocessing",
+    "data_preprocessing_new",
     "crop_to_multiple",
     "unstdize",
     "compute_mae",
