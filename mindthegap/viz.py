@@ -355,3 +355,193 @@ def plot_prediction_gapfill(
 
     plt.subplots_adjust(top=0.96)
     plt.show()
+
+
+def _fake_cloud_mae_per_day(ds_std, model, mean, std, target="CHL",
+                            mask_flag="fake_cloud_flag", block=100):
+    """Per-time-step gap-fill error: mean ``|prediction - truth|`` at the fake-cloud pixels.
+
+    Predicts the whole field for each time step (the model is fully convolutional) and averages
+    the absolute error over that step's masked pixels. Loads ``ds_std`` in blocks of ``block`` time
+    steps so a multi-year lazy dataset does not have to fit in memory. Makes no assumption about the
+    time layout.
+
+    Returns
+    -------
+    (times, mae) : (numpy.ndarray[datetime64], numpy.ndarray[float])
+        One value per time step; NaN for steps with no masked pixels.
+    """
+    xvars = [v for v in ds_std.data_vars if v != target]
+    times = np.asarray(ds_std.time.values)
+    out = np.full(len(times), np.nan)
+    for i in range(0, len(times), block):
+        sub = ds_std.isel(time=slice(i, i + block))
+        sub = sub.load() if hasattr(sub, "load") else sub
+        X = np.stack([np.nan_to_num(sub[v].values, nan=0.0) for v in xvars], -1).astype("float32")
+        pred = model.predict(X, batch_size=4, verbose=0)[..., 0] * std + mean
+        truth = sub[target].values * std + mean
+        m = (sub[mask_flag].values == 1) & np.isfinite(truth) & np.isfinite(pred)
+        diff = np.where(m, np.abs(pred - truth), np.nan)
+        with np.errstate(invalid="ignore"):
+            out[i:i + diff.shape[0]] = np.nanmean(diff.reshape(diff.shape[0], -1), axis=1)
+    return times, out
+
+
+def overall_perf(ds_std, model, mean, std, train_times=None, freq="D", kind="line",
+                 target="CHL", mask_flag="fake_cloud_flag", block=100, ax=None, label=None):
+    """Time series of gap-fill error (fake-cloud MAE) for one model over ``ds_std``.
+
+    For each time step it predicts the whole field, takes ``|prediction - truth|`` at the
+    fake-cloud pixels, and averages. Optionally aggregates to month/year and marks the training
+    days in red.
+
+    Deliberately assumption-free about the data:
+      * ``train_times`` is any collection of timestamps, matched by day membership, so the training
+        days may be non-contiguous / not a single block (or omitted entirely, if unknown).
+      * ``kind="scatter"`` draws dots instead of a connected line, for a sparse/random set of days
+        where a line would imply continuity that is not there.
+
+    Parameters
+    ----------
+    ds_std : xr.Dataset
+        Standardized model inputs, including ``target`` and ``mask_flag``. May be lazy.
+    model : keras model
+        Fully-convolutional model returning one standardized channel.
+    mean, std : float
+        Standardization stats for ``target``; the error is reported in the original (log) units.
+    train_times : sequence of datetime-like, or None
+        Training days, marked red. None marks nothing (no assumption about the split).
+    freq : {"D", "M", "Y"}
+        "D" keeps per-day; "M"/"Y" average within each month/year.
+    kind : {"line", "scatter"}
+        Line for regularly-spaced days; scatter for a sparse/random subset.
+    target, mask_flag : str
+        Names of the truth variable and the fake-cloud flag in ``ds_std``.
+    ax : matplotlib axis or None
+        Draw onto an existing axis (to overlay several models); None makes its own figure.
+    label : str or None
+        Legend label for this series.
+
+    Returns
+    -------
+    pandas.Series
+        The (aggregated) per-time MAE, indexed by time. ``series.mean()`` is the overall number.
+    """
+    import pandas as pd
+    times, mae = _fake_cloud_mae_per_day(ds_std, model, mean, std, target, mask_flag, block)
+    s = pd.Series(mae, index=pd.to_datetime(times)).dropna()
+
+    train_norm = set()
+    if train_times is not None:
+        train_norm = set(pd.to_datetime(list(train_times)).normalize())
+    is_train = pd.Series(s.index.normalize().isin(train_norm), index=s.index)
+
+    if freq and str(freq).upper() in ("M", "Y"):
+        per = s.index.to_period(str(freq).upper())
+        s = s.groupby(per).mean()
+        is_train = is_train.groupby(per).mean() > 0.5
+        s.index = s.index.to_timestamp()
+        is_train.index = s.index
+
+    own = ax is None
+    if own:
+        _, ax = plt.subplots(figsize=(11, 4))
+    if kind == "scatter":
+        ax.scatter(s.index, s.values, s=18,
+                   c=np.where(is_train.values, "red", "black"), zorder=2, label=label)
+    else:
+        ax.plot(s.index, s.values, color="black", lw=1.3, zorder=1, label=label)
+        if is_train.any():
+            ax.plot(s.index[is_train.values], s.values[is_train.values], "o",
+                    color="red", ms=4, zorder=2)
+    ax.set_xlabel("time")
+    ax.set_ylabel("fake-cloud MAE")
+    if own:
+        ax.grid(alpha=0.3)
+        if label is not None:
+            ax.legend()
+        plt.show()
+
+    overall = float(s.mean())
+    if train_times is not None and is_train.any() and (~is_train).any():
+        print(f"{label or 'model'}: overall {overall:.4f}   train {s[is_train.values].mean():.4f}"
+              f"   other {s[~is_train.values].mean():.4f}")
+    else:
+        print(f"{label or 'model'}: overall MAE {overall:.4f}")
+    return s
+
+
+def spatial_perf(ds_std, model, mean, std, groupby=None, target="CHL",
+                 mask_flag="fake_cloud_flag", block=100, plot=True):
+    """Per-pixel gap-fill error map: mean ``|prediction - truth|`` at fake-cloud pixels over time.
+
+    Shows *where* the model reconstructs cloud gaps well or badly. ``groupby="month"`` returns a
+    seasonal stack (one map per calendar month) instead of a single all-time map.
+
+    Parameters
+    ----------
+    groupby : None or "month"
+        None -> one (lat, lon) map. "month" -> a (month, lat, lon) stack.
+    ds_std, model, mean, std, target, mask_flag, block :
+        As in :func:`overall_perf`.
+    plot : bool
+        Draw the map(s) as well as returning them.
+
+    Returns
+    -------
+    xr.DataArray
+        (lat, lon) if ``groupby`` is None, else (month, lat, lon), of mean absolute error.
+    """
+    import pandas as pd
+    xvars = [v for v in ds_std.data_vars if v != target]
+    lat, lon = ds_std["lat"], ds_std["lon"]
+    H, W = ds_std.sizes["lat"], ds_std.sizes["lon"]
+    months = pd.to_datetime(ds_std.time.values).month.to_numpy()
+    G = 12 if groupby == "month" else 1
+
+    ssum = np.zeros((G, H, W)); cnt = np.zeros((G, H, W))
+    for i in range(0, ds_std.sizes["time"], block):
+        sub = ds_std.isel(time=slice(i, i + block))
+        sub = sub.load() if hasattr(sub, "load") else sub
+        X = np.stack([np.nan_to_num(sub[v].values, nan=0.0) for v in xvars], -1).astype("float32")
+        pred = model.predict(X, batch_size=4, verbose=0)[..., 0] * std + mean
+        truth = sub[target].values * std + mean
+        m = (sub[mask_flag].values == 1) & np.isfinite(truth) & np.isfinite(pred)
+        ad = np.where(m, np.abs(pred - truth), 0.0)
+        if groupby == "month":
+            mo = months[i:i + pred.shape[0]]
+            for k in range(pred.shape[0]):
+                g = int(mo[k]) - 1
+                ssum[g] += ad[k]; cnt[g] += m[k]
+        else:
+            ssum[0] += ad.sum(0); cnt[0] += m.sum(0)
+
+    with np.errstate(invalid="ignore"):
+        mae = ssum / np.where(cnt == 0, np.nan, cnt)
+
+    if groupby == "month":
+        da = xr.DataArray(mae, dims=("month", "lat", "lon"),
+                          coords={"month": np.arange(1, 13), "lat": lat, "lon": lon})
+    else:
+        da = xr.DataArray(mae[0], dims=("lat", "lon"), coords={"lat": lat, "lon": lon})
+
+    if plot:
+        extent = _map_extent(ds_std)
+        if groupby == "month":
+            fig, axes = plt.subplots(3, 4, figsize=(14, 8),
+                                     subplot_kw={"projection": ccrs.PlateCarree()})
+            im = None
+            for mo, ax in zip(range(1, 13), axes.ravel()):
+                im = ax.imshow(da.sel(month=mo).values, extent=extent, origin="upper",
+                               transform=ccrs.PlateCarree(), interpolation="nearest")
+                ax.add_feature(cfeature.COASTLINE, linewidth=0.4)
+                ax.set_title(f"month {mo}", size=9)
+            fig.colorbar(im, ax=axes.ravel().tolist(), fraction=0.02, label="MAE")
+        else:
+            fig, ax = plt.subplots(figsize=(7, 5), subplot_kw={"projection": ccrs.PlateCarree()})
+            im = ax.imshow(da.values, extent=extent, origin="upper",
+                           transform=ccrs.PlateCarree(), interpolation="nearest")
+            ax.add_feature(cfeature.COASTLINE, linewidth=0.4)
+            fig.colorbar(im, ax=ax, label="MAE")
+        plt.show()
+    return da
