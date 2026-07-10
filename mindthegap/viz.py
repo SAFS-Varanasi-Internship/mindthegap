@@ -6,6 +6,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from pathlib import Path
 from typing import Sequence, Union
+from matplotlib.colors import ListedColormap, BoundaryNorm
 
 
 def _map_extent(zarr_like):
@@ -41,16 +42,16 @@ def _map_ticks(extent, step=5):
 
 def plot_prediction_observed(
     zarr_stdized,
-    zarr_label, 
     model, 
     date_to_predict,
-    datadir: Union[str, Path] = "data",
+    meanCHL=0,
+    stdCHL=1
 ):
     """
     Plot observed vs. predicted log(Chl-a) for a single date, along with flags and differences.
 
     This function:
-      1) loads mean/std used during standardization from ``{datadir}/{zarr_label}.npy``,
+      1) uses a user specified mean/std for CHL that was used for training. This can be found in ``{datadir}/{zarr_label}.npy``,
       2) builds a predictor tensor X for the requested date from all variables in ``zarr_stdized``
          except ``"CHL"``, filling NaNs with 0.0,
       4) runs the model to produce standardized predictions, then unstandardizes back to log-scale
@@ -63,22 +64,13 @@ def plot_prediction_observed(
     zarr_stdized : xarray.Dataset
         Dataset containing standardized predictors (and flags) for the model input. Must include
         the variables used by the model as well as ``'CHL'`` (which is removed from X).
-    zarr_label : str
-        Label used to locate the standardization sidecar file ``{datadir}/{zarr_label}.npy``
-        containing ``{'CHL': array([mean, std]), 'masked_CHL': ...}``.
     model : tf.keras.Model
         Trained U-Net (or compatible) model expecting input shaped (H, W, C) and returning
         a single-channel prediction of standardized log(Chl-a).
     date_to_predict : str or numpy.datetime64 or pandas.Timestamp
         Date to visualize; must match the ``time`` coordinate in ``zarr_stdized`` and ``zarr_ds``.
+    meanCHL, stdCHL : the values to unstandardize the predictions back to the observed scale for display and MAE calculations
 
-    Notes
-    -----
-    - This function expects the following globals to exist in the module scope:
-        * ``datadir``: directory where ``{zarr_label}.npy`` lives,
-    - Predictions are unstandardized with :func:`utils.unstdize`.
-    - The map extent and tick marks are derived from the ``zarr_stdized`` coordinates so the
-      raster fills the panel without distortion.
 
     See Also
     --------
@@ -88,11 +80,11 @@ def plot_prediction_observed(
 
     Example
     -------
-    >>> plot_prediction_observed(zarr_stdized, zarr_label="2015_3_ArabSea_full_2days",
+    >>> plot_prediction_observed(zarr_stdized, 
     ...                          model=unet_model, date_to_predict="2015-03-15")
     """
-    mean_std = np.load(f'{datadir}/{zarr_label}.npy', allow_pickle='TRUE').item()
-    mean, std = mean_std['CHL'][0], mean_std['CHL'][1]
+    mean = meanCHL
+    std = stdCHL
 
     zarr_date = zarr_stdized.sel(time=date_to_predict)
 
@@ -106,28 +98,36 @@ def plot_prediction_observed(
     X = np.array(X)
     X = np.moveaxis(X, 0, -1)  # (C,H,W) -> (H,W,C)
 
-    # Observed log(Chl-a)
-    true_CHL = unstdize(zarr_stdized.sel(time=date_to_predict)['CHL'], mean, std).to_numpy()
-
-    # Apply fake-cloud mask to observation for display
+    # Observed log(Chl-a): all real observations
+    true_CHL = unstdize(
+        zarr_stdized.sel(time=date_to_predict)["CHL"],
+        mean,
+        std
+    ).to_numpy()
+    
+    # Fake-cloud mask; fake_cloud_flag == 1 means "treated as unobserved during training"
     fake_cloud_flag = zarr_date.fake_cloud_flag.to_numpy()
-    masked_CHL = np.where(fake_cloud_flag == 1, np.nan, true_CHL)
-
+    # Observations treated as unknown, but actually known. We have truth for these
+    masked_CHL = np.where(fake_cloud_flag == 1, true_CHL, np.nan)    
+    # Observations treated as observed/input to the model. Have observations so pred=obs by definition
+    unmasked_CHL = np.where(fake_cloud_flag == 1, np.nan, true_CHL)
+    
     # Predict (standardized), then unstandardize to log-scale using utils.unstdize
     predicted_CHL = model.predict(X[np.newaxis, ...], verbose=0)[0]
     predicted_CHL = predicted_CHL[:, :, 0]
     predicted_CHL = unstdize(predicted_CHL, mean, std)
 
-    # Keep NaN wherever observation is NaN (for fair visual diff)
-    predicted_CHL = np.where(np.isnan(true_CHL), np.nan, predicted_CHL)
-    diff = true_CHL - predicted_CHL
+    # Keep NaN wherever masked observation is NaN
+    # for fair visual comparison of only the fake cloud values
+    predicted_CHL = np.where(np.isnan(masked_CHL), np.nan, predicted_CHL)
+    diff = masked_CHL - predicted_CHL
 
     # Flags panel data (0=land/real cloud, 1=fake cloud, 2=observed valid)
     flag = np.zeros(true_CHL.shape)
     flag = np.where(zarr_date['land_flag'] == 1, 0, flag)
-    flag = np.where(zarr_date['valid_CHL_flag'] == 1, 2, flag)
+    flag = np.where(zarr_date['valid_CHL_flag'] == 1, 2, flag) # unmasked observations
     flag = np.where(zarr_date['real_cloud_flag'] == 1, 3, flag)
-    flag = np.where(zarr_date['fake_cloud_flag'] == 1, 1, flag)
+    flag = np.where(zarr_date['fake_cloud_flag'] == 1, 1, flag) # masked observations
 
     # Color limits matched between observed and predicted
     vmax = np.nanmax((true_CHL, predicted_CHL))
@@ -144,17 +144,26 @@ def plot_prediction_observed(
     axes[0, 0].add_feature(cfeature.COASTLINE)
     axes[0, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[0, 0].set_box_aspect((extent[3] - extent[2]) / (extent[1] - extent[0]))
+    # Overlay only land and selected flag classes
+    overlay = np.full_like(flag, np.nan, dtype=float)
+    overlay[flag == 0] = 0 # land
+    overlay[(flag != 2) & (flag != 1) & (flag != 0)] = 1  # not original observed and not land
+    mask_cmap = ListedColormap(["black", "white"])
+    mask_cmap.set_bad(alpha=0)  # np.nan becomes transparent
+    mask_norm = BoundaryNorm([-0.5, 0.5, 1.5], mask_cmap.N)   
+    axes[0, 0].imshow(overlay, cmap=mask_cmap, norm=mask_norm, extent=extent,
+        origin='upper', transform=ccrs.PlateCarree(),
+        interpolation='nearest', alpha=1)
     axes[0, 0].set_xlabel('longitude'); axes[0, 0].set_ylabel('latitude')
     lon_ticks, lat_ticks = _map_ticks(extent)
     axes[0, 0].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
     axes[0, 0].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
-    axes[0, 0].set_title('Observed Level-3 log Chl-a', size=14)
+    axes[0, 0].set_title('Observed log Chl-a', size=14)
 
     # Panel 2 flags
-    from matplotlib.colors import ListedColormap
     im1 = axes[0, 1].imshow(flag, extent=extent, origin="upper",
                             transform=ccrs.PlateCarree(),
-                            cmap=ListedColormap(["white", "teal", "yellow", "darkblue"]),
+                            cmap=ListedColormap(["black", "teal", "yellow", "white"]),
                             vmin=0, vmax=3, interpolation="nearest",)
     axes[0, 1].add_feature(cfeature.COASTLINE)
     axes[0, 1].set_extent(extent, crs=ccrs.PlateCarree())
@@ -162,20 +171,27 @@ def plot_prediction_observed(
     axes[0, 1].set_xlabel('longitude'); axes[0, 1].set_ylabel('latitude')
     axes[0, 1].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
     axes[0, 1].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
-    axes[0, 1].set_title('Land (0), Cloud (3), Observed (2), Masked (1)', size=13)
+    axes[0, 1].set_title('Land (blk), Cloud (wht), Observed (yel), Masked (teal)', size=13)
 
+    # Panel 3 prediction for the fake cloud areas
     im2 = axes[1, 0].imshow(predicted_CHL, vmin=vmin, vmax=vmax, extent=extent,
                             origin='upper', transform=ccrs.PlateCarree(), interpolation='nearest')
     axes[1, 0].add_feature(cfeature.COASTLINE)
     axes[1, 0].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 0].set_box_aspect((extent[3] - extent[2]) / (extent[1] - extent[0]))
-    axes[1, 0].imshow(np.where(flag == 1, np.nan, flag), vmax=2, vmin=0,
-                      extent=extent, origin='upper', interpolation='nearest', alpha=1)
+    # Overlay only land and selected flag classes
+    overlay = np.full_like(flag, np.nan, dtype=float)
+    overlay[flag == 0] = 0 # land
+    overlay[(flag != 1) & (flag != 0)] = 1  # not masked observation and not land
+    axes[1, 0].imshow(overlay, cmap=mask_cmap, norm=mask_norm, extent=extent,
+        origin='upper', transform=ccrs.PlateCarree(),
+        interpolation='nearest', alpha=1)
     axes[1, 0].set_xlabel('longitude'); axes[1, 0].set_ylabel('latitude')
     axes[1, 0].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
     axes[1, 0].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
-    axes[1, 0].set_title('Predicted log Chl-a from U-Net', size=14)
+    axes[1, 0].set_title('Predicted log Chl-a for masked pixels', size=14)
 
+    # Panel 4 diff true - pred for area under fake clouds
     vmin2, vmax2 = -1, 1
     im3 = axes[1, 1].imshow(diff, vmin=vmin2, vmax=vmax2, extent=extent,
                             origin='upper', transform=ccrs.PlateCarree(),
@@ -183,19 +199,24 @@ def plot_prediction_observed(
     axes[1, 1].add_feature(cfeature.COASTLINE)
     axes[1, 1].set_extent(extent, crs=ccrs.PlateCarree())
     axes[1, 1].set_box_aspect((extent[3] - extent[2]) / (extent[1] - extent[0]))
+    # Overlay only land and selected flag classes
+    axes[1, 1].imshow(overlay, cmap=mask_cmap, norm=mask_norm, extent=extent,
+        origin='upper', transform=ccrs.PlateCarree(),
+        interpolation='nearest', alpha=1)
     axes[1, 1].set_xlabel('longitude'); axes[1, 1].set_ylabel('latitude')
     axes[1, 1].set_xticks(lon_ticks, crs=ccrs.PlateCarree())
     axes[1, 1].set_yticks(lat_ticks, crs=ccrs.PlateCarree())
-    # (Optional) show quick metrics using utils helpers
-    mae = compute_mae(true_CHL, predicted_CHL)
-    mse = compute_mse(true_CHL, predicted_CHL)
+
+    # show quick metrics using utils helpers
+    mae = compute_mae(masked_CHL, predicted_CHL)
+    mse = compute_mse(masked_CHL, predicted_CHL)
     axes[1, 1].set_title(f'Difference (obs − pred)\nMAE={mae:.3f}, MSE={mse:.3f}', size=13)
 
     fig.subplots_adjust(right=0.76)
     cbar1_ax = fig.add_axes([0.79, 0.14, 0.025, 0.72]); fig.colorbar(im0, cax=cbar1_ax).ax.set_ylabel(
         'log Chl-a (mg/m-3)', rotation=270, size=14, labelpad=16)
     cbar2_ax = fig.add_axes([0.86, 0.14, 0.025, 0.72]); fig.colorbar(im1, cax=cbar2_ax).ax.set_ylabel(
-        'land & real cloud = 0, fake cloud = 1, observed after masking = 2', rotation=270, size=14, labelpad=20)
+        'cloud, unobserved = white, masked observed = teal, unmasked observed = yellow', rotation=270, size=14, labelpad=20)
     cbar3_ax = fig.add_axes([0.94, 0.14, 0.025, 0.72]); fig.colorbar(im3, cax=cbar3_ax).ax.set_ylabel(
         'difference in log Chl-a', rotation=270, size=14, labelpad=16)
 
