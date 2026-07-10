@@ -9,10 +9,13 @@ A model bundle packages together:
 
 This enables reproducible gap-filling workflows by keeping all necessary
 artifacts together in a single directory.
+
+Supports loading from local paths, GitHub URLs, and cloud storage (GCS, S3).
 """
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 import numpy as np
@@ -214,14 +217,27 @@ class ModelBundle:
         )
     
     @classmethod
-    def load(cls, bundle_path: Union[str, Path]) -> "ModelBundle":
+    def load(cls, bundle_path: Union[str, Path], cache_dir: Optional[str] = None) -> "ModelBundle":
         """
-        Load a model bundle from disk.
+        Load a model bundle from local path, GitHub URL, or cloud storage.
+        
+        Supports:
+        - Local paths: "models/arabsea_2015"
+        - GitHub raw URLs: "https://github.com/user/repo/raw/main/models/bundle_name"
+          (Tip: Use GitHub's "raw" URLs, or release URLs work best)
+        - Cloud storage: "gs://bucket/models/bundle_name", "s3://bucket/models/bundle_name"
+        
+        For GitHub: Upload your bundle directory with all 4 files (model.keras, stats.json,
+        metadata.json, history.json) and use the raw URL to the directory. The function
+        will download each file automatically.
         
         Parameters
         ----------
         bundle_path : str or Path
-            Path to the bundle directory.
+            Path or URL to the bundle directory.
+        cache_dir : str, optional
+            Directory to cache remote bundles. If None, uses ~/.cache/mindthegap/bundles.
+            Remote bundles are cached locally to avoid re-downloading.
         
         Returns
         -------
@@ -232,18 +248,46 @@ class ModelBundle:
         ------
         FileNotFoundError
             If bundle_path does not exist or required files are missing.
+        ImportError
+            If fsspec is required but not installed (for cloud storage).
         
         Examples
         --------
+        >>> # Load from local path
         >>> bundle = ModelBundle.load("models/arabsea_2015")
-        >>> predictions = bundle.model.predict(X_test)
-        >>> unstandardized = unstdize(predictions, bundle.stats['CHL'])
+        >>> 
+        >>> # Load from GitHub raw URL
+        >>> bundle = ModelBundle.load(
+        ...     "https://raw.githubusercontent.com/user/repo/main/models/arabsea_2015"
+        ... )
+        >>> 
+        >>> # Load from GCS (requires fsspec and gcsfs)
+        >>> bundle = ModelBundle.load("gs://my-bucket/models/arabsea_2015")
+        >>> 
+        >>> # Specify custom cache directory
+        >>> bundle = ModelBundle.load(
+        ...     "https://github.com/user/repo/raw/main/models/bundle",
+        ...     cache_dir="/tmp/model_cache"
+        ... )
         """
         import tensorflow as tf
         
-        bundle_path = Path(bundle_path)
-        if not bundle_path.exists():
-            raise FileNotFoundError(f"Bundle not found at {bundle_path}")
+        bundle_path_str = str(bundle_path)
+        
+        # Check if remote (URL or cloud storage)
+        is_remote = (
+            bundle_path_str.startswith(('http://', 'https://')) or
+            bundle_path_str.startswith(('gs://', 's3://', 'gcs://'))
+        )
+        
+        if is_remote:
+            # Download to local cache
+            local_path = _download_bundle(bundle_path_str, cache_dir)
+            bundle_path = Path(local_path)
+        else:
+            bundle_path = Path(bundle_path)
+            if not bundle_path.exists():
+                raise FileNotFoundError(f"Bundle not found at {bundle_path}")
         
         # Load model
         model_file = bundle_path / "model.keras"
@@ -403,10 +447,143 @@ def save_model_bundle(
     )
 
 
-def load_model_bundle(bundle_path: Union[str, Path]) -> ModelBundle:
+def load_model_bundle(bundle_path: Union[str, Path], cache_dir: Optional[str] = None) -> ModelBundle:
     """
-    Load a model bundle. Convenience wrapper for ModelBundle.load().
+    Load a model bundle from local path, URL, or cloud storage.
     
-    See ModelBundle.load() for full documentation.
+    Convenience wrapper for ModelBundle.load().
+    
+    Supports local paths, GitHub raw URLs, and cloud storage (gs://, s3://).
+    Remote bundles are automatically cached to ~/.cache/mindthegap/bundles.
+    
+    Parameters
+    ----------
+    bundle_path : str or Path
+        Local path or URL to the bundle directory.
+    cache_dir : str, optional
+        Custom cache directory for remote bundles.
+    
+    Returns
+    -------
+    ModelBundle
+        Loaded bundle with model, stats, and metadata.
+    
+    Examples
+    --------
+    >>> # Local
+    >>> bundle = load_model_bundle("models/arabsea_2015")
+    >>> 
+    >>> # GitHub
+    >>> bundle = load_model_bundle(
+    ...     "https://raw.githubusercontent.com/user/repo/main/models/arabsea_2015"
+    ... )
     """
-    return ModelBundle.load(bundle_path)
+    return ModelBundle.load(bundle_path, cache_dir=cache_dir)
+
+
+def _download_bundle(url: str, cache_dir: Optional[str] = None) -> Path:
+    """
+    Download a remote bundle to local cache.
+    
+    Parameters
+    ----------
+    url : str
+        URL or cloud path to the bundle.
+    cache_dir : str, optional
+        Directory to cache bundles. If None, uses ~/.cache/mindthegap/bundles
+    
+    Returns
+    -------
+    Path
+        Path to the local cached bundle directory.
+    """
+    import hashlib
+    import shutil
+    from urllib.parse import urlparse
+    
+    # Determine cache directory
+    if cache_dir is None:
+        cache_dir = Path.home() / ".cache" / "mindthegap" / "bundles"
+    else:
+        cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create cache key from URL
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+    parsed = urlparse(url)
+    bundle_name = Path(parsed.path).name or "bundle"
+    local_bundle_dir = cache_dir / f"{bundle_name}_{url_hash}"
+    
+    # Check if already cached
+    if local_bundle_dir.exists() and (local_bundle_dir / "model.keras").exists():
+        print(f"Using cached bundle from {local_bundle_dir}")
+        return local_bundle_dir
+    
+    print(f"Downloading bundle from {url}...")
+    local_bundle_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Try fsspec first for cloud storage and some URLs
+    try:
+        import fsspec
+        
+        # Determine if we need to download files individually
+        if url.startswith(('http://', 'https://')):
+            # For HTTP(S), try to download the bundle as individual files
+            _download_http_bundle(url, local_bundle_dir)
+        else:
+            # For cloud storage (gs://, s3://), use fsspec
+            fs = fsspec.filesystem(parsed.scheme)
+            remote_path = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            
+            # Download all files in the bundle directory
+            for file_name in ["model.keras", "stats.json", "metadata.json", "history.json"]:
+                remote_file = f"{remote_path}/{file_name}"
+                local_file = local_bundle_dir / file_name
+                try:
+                    fs.get(remote_file, str(local_file))
+                    print(f"  ✓ Downloaded {file_name}")
+                except Exception as e:
+                    if file_name not in ["history.json"]:  # history is optional
+                        raise FileNotFoundError(f"Could not download {file_name}: {e}")
+        
+        print(f"✓ Bundle cached to {local_bundle_dir}")
+        return local_bundle_dir
+    
+    except ImportError:
+        raise ImportError(
+            "fsspec is required for remote bundle loading. Install with: pip install fsspec"
+        )
+    except Exception as e:
+        # Clean up partial download
+        if local_bundle_dir.exists():
+            shutil.rmtree(local_bundle_dir)
+        raise RuntimeError(f"Failed to download bundle from {url}: {e}")
+
+
+def _download_http_bundle(base_url: str, local_dir: Path) -> None:
+    """
+    Download bundle files from HTTP(S) URL.
+    
+    Handles both raw GitHub URLs and other HTTP sources.
+    """
+    import urllib.request
+    
+    # Ensure base_url doesn't have trailing slash for consistent joining
+    base_url = base_url.rstrip('/')
+    
+    # Try to download each file
+    for file_name in ["model.keras", "stats.json", "metadata.json", "history.json"]:
+        file_url = f"{base_url}/{file_name}"
+        local_file = local_dir / file_name
+        
+        try:
+            urllib.request.urlretrieve(file_url, local_file)
+            print(f"  ✓ Downloaded {file_name}")
+        except Exception as e:
+            if file_name not in ["history.json"]:  # history is optional
+                raise FileNotFoundError(
+                    f"Could not download {file_name} from {file_url}. "
+                    f"Make sure the URL points to the bundle directory containing "
+                    f"model.keras, stats.json, and metadata.json. Error: {e}"
+                )
+

@@ -77,8 +77,18 @@ bundle = mtg.save_model_bundle(
     history=history
 )
 
-# Load for prediction
+# Load from local path
 bundle = mtg.load_model_bundle("models/arabsea_2015")
+
+# Load from GitHub (use raw URLs)
+bundle = mtg.load_model_bundle(
+    "https://raw.githubusercontent.com/user/repo/main/models/arabsea_2015"
+)
+
+# Load from cloud storage (requires fsspec)
+bundle = mtg.load_model_bundle("gs://bucket/models/arabsea_2015")
+
+# Use the bundle
 model = bundle.model
 stats = bundle.stats
 ```
@@ -88,6 +98,8 @@ A bundle contains:
 - `stats.json` - Standardization statistics (mean, stdev)
 - `metadata.json` - Training configuration and provenance
 - `history.json` - Training history (optional)
+
+**For GitHub repositories**: Commit your bundle directory with all files. The load function will automatically download each file from the raw URL. Remote bundles are cached to `~/.cache/mindthegap/bundles` to avoid re-downloading.
 
 See `book/5-Model_Bundle_Example.ipynb` for complete examples.
 
