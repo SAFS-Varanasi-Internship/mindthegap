@@ -145,17 +145,16 @@ def data_preprocessing_new(
     )
     print('target masked with synthetic missing added')
 
-    # Create true missing mask
-    ds["true_missing_flag"] = (
-        ds[missing_flag] == 1
-    ).astype("int8")
+    # Create true missing mask; clouds
+    ds["true_missing_flag"] = (ds[missing_flag] == 1).astype("int8")
     print(f'true missing flag added from {missing_flag}')
 
     # Create land mask
-    ds["land_flag"] = (
-        ds[land_flag] == 1
-    ).astype("int8")
+    ds["land_flag"] = (ds[land_flag] == 1).astype("int8")
     print(f'land flag added from {land_flag}')
+
+    ds["valid_masked_target_flag"] = ds["masked_target"].notnull().astype("int8")
+    print(f'flag for the target that we train on (masked target)')
 
     # Locations deliberately hidden for training:
     # shifted pattern says mask, but the location is not land,
@@ -220,7 +219,7 @@ def data_preprocessing_new(
         ds_standardized.update((ds[std_vars] - means[std_vars]) / stds[std_vars])
 
     # Final clean
-    keep_vars = standardizable_vars + ["day_sin", "day_cos", "synthetic_missing_flag", "true_missing_flag", "land_flag"]
+    keep_vars = standardizable_vars + ["day_sin", "day_cos", "synthetic_missing_flag", "true_missing_flag", "valid_masked_target_flag", "land_flag"]
     ds_standardized = ds_standardized[keep_vars]
 
     # Add the standardization variables to the processed data

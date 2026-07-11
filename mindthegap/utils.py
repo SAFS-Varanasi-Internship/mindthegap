@@ -276,6 +276,210 @@ IO_ZARR_STATS = {
 #IO_ZARR_STATS = None
 
 
+def build_standardized_lazy_new(
+    ds,
+    target_variable="CHL_cmes-level3",
+    missing_flag="CHL_cmes-cloud",
+    land_flag="CHL_cmes-land",
+    features=None,
+    train_dates=None,
+    std_vars=None,
+    log_target=True,
+    missing_flag_shift=10,
+    n_temporal_lags=1,
+    output_chunks=None,
+):
+    """
+    Lazy, on-the-fly equivalent of ``create_zarr.data_preprocessing_new``.
+
+    This mirrors the newer preprocessing path: it builds ``full_target``,
+    ``masked_target``, true/synthetic missing flags, day-of-year sine/cosine
+    features, and optional masked-target lags directly from a raw dataset,
+    while returning a dask-backed standardized dataset ready for xbatcher /
+    TensorFlow use. Unlike the eager version, the seasonal channels are
+    broadcast to ``(time, lat, lon)`` so they can be stacked as spatial
+    model inputs without an intermediate Zarr write.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Raw dataset with ``time``, ``lat``, and ``lon`` coordinates.
+    target_variable : str, default "CHL_cmes-level3"
+        Name of the variable to use as the prediction target.
+    missing_flag : str, default "CHL_cmes-cloud"
+        Name of the variable whose value ``1`` marks true missing/cloud pixels.
+        Its time-shifted pattern is also used to build the synthetic mask.
+    land_flag : str, default "CHL_cmes-land"
+        Name of the variable whose value ``1`` marks land pixels.
+    features : sequence of str or None, default None
+        Additional predictor variables to carry through preprocessing. ``None``
+        is treated the same as an empty list.
+    train_dates : indexer or None, default None
+        Time selection used when computing standardization statistics. If
+        ``None``, all dates in ``ds`` are used.
+    std_vars : sequence of str or None, default None
+        Variables to standardize. These must be drawn from ``features`` plus
+        the derived target-like variables created by this function. If ``None``,
+        defaults to ``features``. Standardizable variables not listed here are
+        left unchanged and get identity stats (mean 0, std 1).
+    log_target : bool, default True
+        If True, apply ``log`` to positive target values before any masking or
+        standardization.
+    missing_flag_shift : int, default 10
+        Number of time steps used to shift ``missing_flag`` when creating the
+        synthetic mask pattern.
+    n_temporal_lags : int, default 1
+        Number of previous and next masked-target time steps to add as
+        ``masked_target_m{i}`` and ``masked_target_p{i}``.
+    output_chunks : dict or None, default None
+        Dask chunking for the returned dataset. ``None`` keeps the default
+        ``{"time": 100, "lat": -1, "lon": -1}``.
+
+    Returns
+    -------
+    ds_out : xr.Dataset
+        Lazy standardized dataset containing the engineered channels and
+        ``full_target`` label, chunked per ``output_chunks``.
+    stats : dict
+        Standardization statistics for downstream unstandardization and bundle
+        saving. Includes both the new ``full_target`` / ``masked_target`` keys
+        and compatibility aliases ``CHL`` / ``masked_CHL``.
+    """
+    features = list(features or [])
+
+    keep_vars = [target_variable] + features + [missing_flag, land_flag]
+    ds = ds[keep_vars]
+
+    for coord in ("time", "lat", "lon"):
+        if coord not in ds.coords:
+            raise ValueError(
+                f"Required coordinate '{coord}' not found in ds. Rename coords if needed."
+            )
+
+    ds_processed = ds.rename({target_variable: "full_target"})
+
+    if log_target:
+        ds_processed["full_target"] = np.log(
+            ds_processed["full_target"].where(ds_processed["full_target"] > 0)
+        )
+
+    shifted_missing_flag = ds_processed[missing_flag].roll(
+        time=-missing_flag_shift,
+        roll_coords=False,
+    )
+
+    ds_processed["masked_target"] = ds_processed["full_target"].where(
+        shifted_missing_flag != 0
+    )
+    ds_processed["true_missing_flag"] = (
+        ds_processed[missing_flag] == 1
+    ).astype("int8")
+    ds_processed["land_flag"] = (
+        ds_processed[land_flag] == 1
+    ).astype("int8")
+    ds_processed["synthetic_missing_flag"] = (
+        (shifted_missing_flag == 0)
+        & (ds_processed["land_flag"] == 0)
+        & (ds_processed["true_missing_flag"] == 0)
+        & ds_processed["full_target"].notnull()
+    ).astype("int8")
+
+    day_of_year = ds_processed.time.dt.dayofyear
+    spatial_template = xr.ones_like(
+        ds_processed["full_target"].isel(time=0, drop=True),
+        dtype=np.float32,
+    )
+    ds_processed["day_sin"] = (
+        np.sin(2 * np.pi * day_of_year / 365.25).astype("float32")
+        * spatial_template
+    ).transpose("time", "lat", "lon")
+    ds_processed["day_cos"] = (
+        np.cos(2 * np.pi * day_of_year / 365.25).astype("float32")
+        * spatial_template
+    ).transpose("time", "lat", "lon")
+
+    standardizable_vars = features + ["full_target", "masked_target"]
+
+    for i in range(1, n_temporal_lags + 1):
+        prev_name = f"masked_target_m{i}"
+        next_name = f"masked_target_p{i}"
+        ds_processed[prev_name] = ds_processed["masked_target"].shift(time=i)
+        ds_processed[next_name] = ds_processed["masked_target"].shift(time=-i)
+        standardizable_vars.extend([prev_name, next_name])
+
+    if std_vars is None:
+        std_vars = list(features)
+    else:
+        std_vars = list(std_vars)
+
+    unknown_std_vars = sorted(set(std_vars) - set(standardizable_vars))
+    if unknown_std_vars:
+        raise ValueError(
+            "std_vars contains unknown variables: "
+            + ", ".join(unknown_std_vars)
+        )
+
+    mean_values = {var: 0.0 for var in standardizable_vars}
+    std_values = {var: 1.0 for var in standardizable_vars}
+
+    if std_vars:
+        stats_source = ds_processed[std_vars]
+        if train_dates is not None:
+            stats_source = stats_source.sel(time=train_dates)
+
+        computed_means = stats_source.mean(
+            dim=("time", "lat", "lon"),
+            skipna=True,
+        ).compute()
+        computed_stds = stats_source.std(
+            dim=("time", "lat", "lon"),
+            skipna=True,
+        ).compute()
+
+        for var in std_vars:
+            mean_values[var] = float(computed_means[var].item())
+            std_values[var] = float(computed_stds[var].item())
+
+    ds_standardized = ds_processed.copy()
+    for var in std_vars:
+        ds_standardized[var] = (
+            ds_processed[var] - mean_values[var]
+        ) / std_values[var]
+
+    output_vars = standardizable_vars + [
+        "day_sin",
+        "day_cos",
+        "synthetic_missing_flag",
+        "true_missing_flag",
+        "land_flag",
+    ]
+    if output_chunks is None:
+        output_chunks = {"time": 100, "lat": -1, "lon": -1}
+    ds_out = ds_standardized[output_vars].chunk(output_chunks)
+
+    full_target_stats = np.array(
+        [mean_values["full_target"], std_values["full_target"]],
+        dtype=np.float32,
+    )
+    masked_target_stats = np.array(
+        [mean_values["masked_target"], std_values["masked_target"]],
+        dtype=np.float32,
+    )
+    feat_stats = {
+        name: [float(mean_values[name]), float(std_values[name])]
+        for name in standardizable_vars
+        if name != "full_target"
+    }
+    stats = {
+        "full_target": full_target_stats,
+        "masked_target": masked_target_stats,
+        "CHL": full_target_stats.copy(),
+        "masked_CHL": masked_target_stats.copy(),
+        "feat_stats": feat_stats,
+    }
+    return ds_out, stats
+
+
 def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False, output_chunks=None, stats=None):
     """
     Lazy, on-the-fly equivalent of `create_zarr.data_preprocessing` that returns a
