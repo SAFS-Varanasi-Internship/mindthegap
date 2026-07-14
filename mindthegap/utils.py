@@ -377,6 +377,9 @@ def build_standardized_lazy_new(
     ds_processed["land_flag"] = (
         ds_processed[land_flag] == 1
     ).astype("int8")
+    ds_processed["valid_masked_target_flag"] = (
+        ds_processed["masked_target"].notnull()
+    ).astype("int8")
     ds_processed["synthetic_missing_flag"] = (
         (shifted_missing_flag == 0)
         & (ds_processed["land_flag"] == 0)
@@ -451,6 +454,7 @@ def build_standardized_lazy_new(
         "day_cos",
         "synthetic_missing_flag",
         "true_missing_flag",
+        "valid_masked_target_flag",
         "land_flag",
     ]
     if output_chunks is None:

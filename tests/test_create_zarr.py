@@ -125,6 +125,7 @@ def test_build_standardized_lazy_new_matches_eager_preprocessing():
         "masked_target_p1",
         "synthetic_missing_flag",
         "true_missing_flag",
+        "valid_masked_target_flag",
         "land_flag",
     ]
     for var in compare_vars:
