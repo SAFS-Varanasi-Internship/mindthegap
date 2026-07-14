@@ -365,9 +365,13 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     masked_CHL = da.where(day_shift_flag == 0, np.nan, CHL_data)
     numer_features.append(masked_CHL)
 
-    prev_day = np.vstack((np.zeros((1,) + CHL_data[0].shape), CHL_data.data[:-1]))
+    #bad; need to use masked_CHL. Already dask array so no .data
+    #prev_day = np.vstack((np.zeros((1,) + CHL_data[0].shape), CHL_data.data[:-1]))
+    prev_day = np.vstack((np.zeros((1,) + masked_CHL[0].shape), masked_CHL[:-1]))
     numer_features.append(prev_day)
-    next_day = np.vstack((CHL_data.data[1:], np.zeros((1,) + CHL_data[0].shape)))
+    #bad; need to use masked_CHL. Already dask array so no .data
+    #next_day = np.vstack((CHL_data.data[1:], np.zeros((1,) + CHL_data[0].shape)))
+    next_day = np.vstack((masked_CHL[1:], np.zeros((1,) + masked_CHL[0].shape)))
     numer_features.append(next_day)
 
     # categorical flags (NOT standardized)
