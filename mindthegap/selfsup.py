@@ -91,7 +91,7 @@ def synthetic_cloud_cube(T, H, W, coverage, blob_sigma=6.0, time_sigma=0.0, rng=
 def build_pace_channels(chl_log, times, train_mask, n_days=1, cloud_mode="synthetic",
                         coverage=0.4, blob_sigma=6.0, time_sigma=0.0,
                         span_frac=0.7, aspect=4.0, cloud_len=3, seed=0, standardize_chl=True,
-                        stats=None):
+                        stats=None, land=None):
     """Build the self-supervised input channels and target from a PACE chlorophyll
     cube alone.
 
@@ -114,11 +114,17 @@ def build_pace_channels(chl_log, times, train_mask, n_days=1, cloud_mode="synthe
     Pass ``stats=`` (a dict from a previous call) to standardize with SHARED stats
     instead of recomputing per call -- required when streaming many spatial chunks so
     every chunk uses one consistent normalization (and one CHL mean/std to invert with).
+
+    Pass ``land=`` (a ``(H, W)`` bool mask) when building channels from a SHORT time
+    window (e.g. a 3-frame window at inference): land is otherwise detected as
+    all-time-NaN, so a short window mislabels transiently-cloudy ocean as land and the
+    flag/masked channels drift out of the training distribution.
     """
     T, H, W = chl_log.shape
     gap = np.isnan(chl_log)
-    land = gap.all(0)
-    land3 = np.broadcast_to(land, chl_log.shape)
+    if land is None:                 # land = never-observed pixel. Detected over the FULL time axis; pass a
+        land = gap.all(0)            # precomputed (global) land when building from a SHORT window (e.g. at
+    land3 = np.broadcast_to(land, chl_log.shape)   # inference), else short-window land mislabels cloudy ocean.
     real_cloud = gap & ~land3
     rng = np.random.default_rng(seed)
 
