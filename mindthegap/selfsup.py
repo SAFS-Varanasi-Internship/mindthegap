@@ -90,7 +90,8 @@ def synthetic_cloud_cube(T, H, W, coverage, blob_sigma=6.0, time_sigma=0.0, rng=
 # --------------------------------------------------------------------------- #
 def build_pace_channels(chl_log, times, train_mask, n_days=1, cloud_mode="synthetic",
                         coverage=0.4, blob_sigma=6.0, time_sigma=0.0,
-                        span_frac=0.7, aspect=4.0, cloud_len=3, seed=0, standardize_chl=True):
+                        span_frac=0.7, aspect=4.0, cloud_len=3, seed=0, standardize_chl=True,
+                        stats=None):
     """Build the self-supervised input channels and target from a PACE chlorophyll
     cube alone.
 
@@ -109,6 +110,10 @@ def build_pace_channels(chl_log, times, train_mask, n_days=1, cloud_mode="synthe
     Returns ``(ch, y, stats, order)``: the channel dict, the standardized target
     ``y`` (NaN kept at land/gaps), a ``stats`` dict (incl. ``stats['CHL'] = (mean,
     std)``), and ``order`` the channel names in model-input order.
+
+    Pass ``stats=`` (a dict from a previous call) to standardize with SHARED stats
+    instead of recomputing per call -- required when streaming many spatial chunks so
+    every chunk uses one consistent normalization (and one CHL mean/std to invert with).
     """
     T, H, W = chl_log.shape
     gap = np.isnan(chl_log)
@@ -148,15 +153,24 @@ def build_pace_channels(chl_log, times, train_mask, n_days=1, cloud_mode="synthe
                "valid_CHL_flag": valid.astype("float32"),
                "fake_cloud_flag": fake.astype("float32")})
 
-    stats = {}
-    for key in numeric:
-        trd = ch[key][train_mask]
-        m, s = float(np.nanmean(trd)), float(np.nanstd(trd))
-        stats[key] = (m, s)
-        ch[key] = np.nan_to_num((ch[key] - m) / (s + 1e-8), nan=0.0, posinf=0.0, neginf=0.0)
-    ym, ys = ((float(np.nanmean(chl_log[train_mask])), float(np.nanstd(chl_log[train_mask])))
-              if standardize_chl else (0.0, 1.0))
-    stats["CHL"] = (ym, ys)
+    # standardize numeric channels. If ``stats`` is given (shared/global stats, e.g. for
+    # streaming many chunks with ONE consistent normalization), use it; else compute on
+    # ``train_mask`` and return the computed dict.
+    if stats is None:
+        stats = {}
+        for key in numeric:
+            trd = ch[key][train_mask]
+            m, s = float(np.nanmean(trd)), float(np.nanstd(trd))
+            stats[key] = (m, s)
+            ch[key] = np.nan_to_num((ch[key] - m) / (s + 1e-8), nan=0.0, posinf=0.0, neginf=0.0)
+        ym, ys = ((float(np.nanmean(chl_log[train_mask])), float(np.nanstd(chl_log[train_mask])))
+                  if standardize_chl else (0.0, 1.0))
+        stats["CHL"] = (ym, ys)
+    else:
+        for key in numeric:
+            m, s = stats[key]
+            ch[key] = np.nan_to_num((ch[key] - m) / (s + 1e-8), nan=0.0, posinf=0.0, neginf=0.0)
+        ym, ys = stats["CHL"]
     order = numeric + ["land_flag", "real_cloud_flag", "valid_CHL_flag", "fake_cloud_flag"]
     return ch, (chl_log - ym) / ys, stats, order
 
