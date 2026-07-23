@@ -401,6 +401,15 @@ def build_standardized_lazy_new(
         * spatial_template
     ).transpose("time", "lat", "lon")
 
+    # Spherical coordinates (broadcast (lat, lon) to (time, lat, lon))
+    ds_with_spherical = add_spherical_coords(ds_processed, lat="lat", lon="lon")
+    for geo_var in ["x_geo", "y_geo", "z_geo"]:
+        # Multiply (lat, lon) geo var by (time,) temporal multiplier to get (time, lat, lon)
+        ds_processed[geo_var] = (
+            xr.ones_like(day_of_year).astype("float32")
+            * ds_with_spherical[geo_var]
+        ).transpose("time", "lat", "lon")
+
     standardizable_vars = features + ["full_target", "masked_target"]
 
     for i in range(1, n_temporal_lags + 1):
@@ -452,6 +461,9 @@ def build_standardized_lazy_new(
     output_vars = standardizable_vars + [
         "day_sin",
         "day_cos",
+        "x_geo",
+        "y_geo",
+        "z_geo",
         "synthetic_missing_flag",
         "true_missing_flag",
         "valid_masked_target_flag",
@@ -599,7 +611,25 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     fake_cloud_flag = da.where((land_flag + real_cloud_flag + valid_CHL_flag) == 0, 1, fake_cloud_flag)
     cat_features.append(fake_cloud_flag)
 
-    numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL']
+    # Spherical coordinates (2D lat/lon grid broadcast to 3D time series)
+    lat2d, lon2d = np.meshgrid(zarr_ds.lat.values, zarr_ds.lon.values, indexing='ij')
+    psi = np.deg2rad(lat2d)
+    lam = np.deg2rad(lon2d)
+    
+    x_geo = np.cos(psi) * np.cos(lam)
+    y_geo = np.cos(psi) * np.sin(lam)
+    z_geo = np.sin(psi)
+    
+    # Broadcast (lat, lon) -> (time, lat, lon) and convert to dask
+    x_geo_3d = da.from_array(np.tile(x_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *x_geo.shape))
+    y_geo_3d = da.from_array(np.tile(y_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *y_geo.shape))
+    z_geo_3d = da.from_array(np.tile(z_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *z_geo.shape))
+    
+    numer_features.append(x_geo_3d)
+    numer_features.append(y_geo_3d)
+    numer_features.append(z_geo_3d)
+
+    numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL', 'x_geo', 'y_geo', 'z_geo']
     cat_var_names = ['land_flag', 'real_cloud_flag', 'valid_CHL_flag', 'fake_cloud_flag']
 
     # Numerical-predictor mean/std: a passed-in stats dict (shared across runs, no data read),
@@ -744,3 +774,75 @@ def UNet(input_shape):
     model = tf.keras.Model(inputs, outputs, name='U-net')
     model.compile(optimizer='adam', loss='mse', metrics=['mae'])
     return model
+
+
+def add_spherical_coords(obj, lat="lat", lon="lon"):
+    """
+    Add 3D unit-sphere coordinates (x_geo, y_geo, z_geo) computed from lat/lon.
+
+    - If `obj` is an xarray.Dataset:
+        * Assumes `lat` and `lon` are 1D coordinates.
+        * Broadcasts to 2D over (lat, lon) and keeps Dask laziness.
+        * Returns an xarray.Dataset with x_geo, y_geo, z_geo variables.
+
+    - If `obj` is a pandas.DataFrame:
+        * Assumes `lat` and `lon` are columns.
+        * Computes per-row x_geo, y_geo, z_geo columns.
+        * Returns a new DataFrame (original is not modified in place).
+
+    Parameters
+    ----------
+    obj : xarray.Dataset or pandas.DataFrame
+    lat : str
+        Name of latitude coordinate/column in degrees.
+    lon : str
+        Name of longitude coordinate/column in degrees.
+
+    Returns
+    -------
+    xarray.Dataset or pandas.DataFrame
+    """
+    # ---- xarray path --------------------------------------------------------
+    if isinstance(obj, xr.Dataset):
+        ds = obj
+
+        # 2D lat/lon (lazy if dask)
+        lat2d, lon2d = xr.broadcast(ds[lat], ds[lon])   # (lat, lon), (lat, lon)
+
+        # radians (lazy)
+        psi = xr.apply_ufunc(np.deg2rad, lat2d, dask="parallelized")
+        lam = xr.apply_ufunc(np.deg2rad, lon2d, dask="parallelized")
+
+        x_geo = xr.apply_ufunc(np.cos, psi, dask="parallelized") * xr.apply_ufunc(np.cos, lam, dask="parallelized")
+        y_geo = xr.apply_ufunc(np.cos, psi, dask="parallelized") * xr.apply_ufunc(np.sin, lam, dask="parallelized")
+        z_geo = xr.apply_ufunc(np.sin, psi, dask="parallelized")
+
+        return ds.assign(
+            x_geo=x_geo.astype("float32"),
+            y_geo=y_geo.astype("float32"),
+            z_geo=z_geo.astype("float32"),
+        )
+
+    # ---- pandas path --------------------------------------------------------
+    if isinstance(obj, pd.DataFrame):
+        df = obj.copy()
+
+        # radians (vectorized numpy on Series)
+        psi = np.deg2rad(df[lat].to_numpy())
+        lam = np.deg2rad(df[lon].to_numpy())
+
+        x_geo = np.cos(psi) * np.cos(lam)
+        y_geo = np.cos(psi) * np.sin(lam)
+        z_geo = np.sin(psi)
+
+        df["x_geo"] = x_geo.astype("float32")
+        df["y_geo"] = y_geo.astype("float32")
+        df["z_geo"] = z_geo.astype("float32")
+
+        return df
+
+    # ---- unsupported type ---------------------------------------------------
+    raise TypeError(
+        f"add_spherical_coords expected xarray.Dataset or pandas.DataFrame, "
+        f"got {type(obj)}"
+    )
