@@ -288,6 +288,7 @@ def build_standardized_lazy_new(
     missing_flag_shift=10,
     n_temporal_lags=1,
     output_chunks=None,
+    add_geo=False,
 ):
     """
     Lazy, on-the-fly equivalent of ``create_zarr.data_preprocessing_new``.
@@ -334,6 +335,9 @@ def build_standardized_lazy_new(
     output_chunks : dict or None, default None
         Dask chunking for the returned dataset. ``None`` keeps the default
         ``{"time": 100, "lat": -1, "lon": -1}``.
+    add_geo : bool, default False
+        If True, add spherical coordinate features (x_geo, y_geo, z_geo)
+        computed from lat/lon to the output dataset.
 
     Returns
     -------
@@ -401,14 +405,15 @@ def build_standardized_lazy_new(
         * spatial_template
     ).transpose("time", "lat", "lon")
 
-    # Spherical coordinates (broadcast (lat, lon) to (time, lat, lon))
-    ds_with_spherical = add_spherical_coords(ds_processed, lat="lat", lon="lon")
-    for geo_var in ["x_geo", "y_geo", "z_geo"]:
-        # Multiply (lat, lon) geo var by (time,) temporal multiplier to get (time, lat, lon)
-        ds_processed[geo_var] = (
-            xr.ones_like(day_of_year).astype("float32")
-            * ds_with_spherical[geo_var]
-        ).transpose("time", "lat", "lon")
+    # Spherical coordinates (optional, broadcast (lat, lon) to (time, lat, lon))
+    if add_geo:
+        ds_with_spherical = add_spherical_coords(ds_processed, lat="lat", lon="lon")
+        for geo_var in ["x_geo", "y_geo", "z_geo"]:
+            # Multiply (lat, lon) geo var by (time,) temporal multiplier to get (time, lat, lon)
+            ds_processed[geo_var] = (
+                xr.ones_like(day_of_year).astype("float32")
+                * ds_with_spherical[geo_var]
+            ).transpose("time", "lat", "lon")
 
     standardizable_vars = features + ["full_target", "masked_target"]
 
@@ -461,14 +466,15 @@ def build_standardized_lazy_new(
     output_vars = standardizable_vars + [
         "day_sin",
         "day_cos",
-        "x_geo",
-        "y_geo",
-        "z_geo",
+    ]
+    if add_geo:
+        output_vars.extend(["x_geo", "y_geo", "z_geo"])
+    output_vars.extend([
         "synthetic_missing_flag",
         "true_missing_flag",
         "valid_masked_target_flag",
         "land_flag",
-    ]
+    ])
     if output_chunks is None:
         output_chunks = {"time": 100, "lat": -1, "lon": -1}
     ds_out = ds_standardized[output_vars].chunk(output_chunks)
@@ -496,7 +502,7 @@ def build_standardized_lazy_new(
     return ds_out, stats
 
 
-def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False, output_chunks=None, stats=None):
+def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False, output_chunks=None, stats=None, add_geo=False):
     """
     Lazy, on-the-fly equivalent of `create_zarr.data_preprocessing` that returns a
     dask-backed standardized ``xr.Dataset`` instead of writing a Zarr store.
@@ -544,6 +550,9 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
         Must be shaped like the returned ``stats`` (``{'feat_stats': {name: [mean, std], ...},
         'CHL': [mean, std]}``). Lets several runs share one computed stats object so they
         standardize identically. Takes precedence over ``use_hardcoded_stats``.
+    add_geo : bool, default False
+        If True, add spherical coordinate features (x_geo, y_geo, z_geo)
+        computed from lat/lon to the output dataset.
 
     Returns
     -------
@@ -611,25 +620,28 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     fake_cloud_flag = da.where((land_flag + real_cloud_flag + valid_CHL_flag) == 0, 1, fake_cloud_flag)
     cat_features.append(fake_cloud_flag)
 
-    # Spherical coordinates (2D lat/lon grid broadcast to 3D time series)
-    lat2d, lon2d = np.meshgrid(zarr_ds.lat.values, zarr_ds.lon.values, indexing='ij')
-    psi = np.deg2rad(lat2d)
-    lam = np.deg2rad(lon2d)
+    numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL']
     
-    x_geo = np.cos(psi) * np.cos(lam)
-    y_geo = np.cos(psi) * np.sin(lam)
-    z_geo = np.sin(psi)
+    # Spherical coordinates (optional, 2D lat/lon grid broadcast to 3D time series)
+    if add_geo:
+        lat2d, lon2d = np.meshgrid(zarr_ds.lat.values, zarr_ds.lon.values, indexing='ij')
+        psi = np.deg2rad(lat2d)
+        lam = np.deg2rad(lon2d)
+        
+        x_geo = np.cos(psi) * np.cos(lam)
+        y_geo = np.cos(psi) * np.sin(lam)
+        z_geo = np.sin(psi)
+        
+        # Broadcast (lat, lon) -> (time, lat, lon) and convert to dask
+        x_geo_3d = da.from_array(np.tile(x_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *x_geo.shape))
+        y_geo_3d = da.from_array(np.tile(y_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *y_geo.shape))
+        z_geo_3d = da.from_array(np.tile(z_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *z_geo.shape))
+        
+        numer_features.append(x_geo_3d)
+        numer_features.append(y_geo_3d)
+        numer_features.append(z_geo_3d)
+        numer_var_names.extend(['x_geo', 'y_geo', 'z_geo'])
     
-    # Broadcast (lat, lon) -> (time, lat, lon) and convert to dask
-    x_geo_3d = da.from_array(np.tile(x_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *x_geo.shape))
-    y_geo_3d = da.from_array(np.tile(y_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *y_geo.shape))
-    z_geo_3d = da.from_array(np.tile(z_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *z_geo.shape))
-    
-    numer_features.append(x_geo_3d)
-    numer_features.append(y_geo_3d)
-    numer_features.append(z_geo_3d)
-
-    numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL', 'x_geo', 'y_geo', 'z_geo']
     cat_var_names = ['land_flag', 'real_cloud_flag', 'valid_CHL_flag', 'fake_cloud_flag']
 
     # Numerical-predictor mean/std: a passed-in stats dict (shared across runs, no data read),
