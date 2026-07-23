@@ -14,11 +14,14 @@ flowchart TB
         B1[BG1<br/>Split function:<br/>train / validation / test]
         B2[BG2<br/>Processing function:<br/>standardize, masks,<br/>time variables]
         B3[BG3<br/>Patch rules:<br/>size, overlap, variables]
+        B0[BG0<br/>Features:<br/>time, geo, env?]
         B4[BG4<br/>xbatcher<br/>batch generator]
 
+        B5 --> B4
         B1 --> B4
         B2 --> B4
         B3 --> B4
+
     end
 
     subgraph C[3. Generated batches]
