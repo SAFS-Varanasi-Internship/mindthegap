@@ -1,7 +1,59 @@
 from typing import Union
 
 import numpy as np
+import pandas as pd
 import xarray as xr
+
+
+def demo_data(
+    days=120,
+    lat_size=16,
+    lon_size=16,
+    start="2020-01-01",
+    seed=42,
+    cloud_fraction=0.12,
+):
+    """Create a deterministic chlorophyll dataset for examples and tests."""
+    if days <= 0 or lat_size <= 0 or lon_size <= 0:
+        raise ValueError("days, lat_size, and lon_size must be positive")
+    if not 0 <= cloud_fraction <= 1:
+        raise ValueError("cloud_fraction must be between 0 and 1")
+
+    rng = np.random.default_rng(seed)
+    time = pd.date_range(start, periods=days, freq="D")
+    lat = np.linspace(31, 5, lat_size)
+    lon = np.linspace(42, 80, lon_size)
+    day, latitude, longitude = np.meshgrid(
+        np.arange(days),
+        lat,
+        lon,
+        indexing="ij",
+    )
+    chlorophyll = np.exp(
+        0.5
+        + 0.25 * np.sin(2 * np.pi * day / 30)
+        + 0.15 * np.cos(np.deg2rad(latitude * 3))
+        + 0.1 * np.sin(np.deg2rad(longitude * 4))
+        + rng.normal(0, 0.05, day.shape)
+    ).astype("float32")
+    land = np.broadcast_to(lat[:, None] > 28, chlorophyll.shape)
+    cloud = rng.random(chlorophyll.shape) < cloud_fraction
+    chlorophyll[land | cloud] = np.nan
+
+    return xr.Dataset(
+        data_vars={
+            "chlor_a": (("time", "lat", "lon"), chlorophyll),
+            "cloud_flag": (
+                ("time", "lat", "lon"),
+                cloud.astype("int8"),
+            ),
+            "land_flag": (
+                ("time", "lat", "lon"),
+                land.astype("int8"),
+            ),
+        },
+        coords={"time": time, "lat": lat, "lon": lon},
+    )
 
 
 def crop_to_multiple(
@@ -133,6 +185,10 @@ def build_standardized_lazy(
         raise ValueError("n_temporal_lags must be non-negative")
 
     processed = ds[required].rename({target_variable: "full_target"})
+    for flag in (missing_flag, land_flag):
+        processed[flag] = processed[flag].broadcast_like(
+            processed["full_target"]
+        )
     if log_target:
         processed["full_target"] = np.log(
             processed["full_target"].where(processed["full_target"] > 0)

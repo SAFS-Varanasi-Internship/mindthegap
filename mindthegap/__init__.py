@@ -1,5 +1,6 @@
 # Re-export the primary functions (explicit, stable API)
 from .utils import (
+    demo_data,
     crop_to_multiple,
     unstdize,
     compute_mae,
@@ -13,6 +14,7 @@ from .utils import (
 from . import viz  # users can do: from mindthegap import viz; viz.plot_prediction_observed(...)
 
 __all__ = [
+    "demo_data",
     "crop_to_multiple",
     "unstdize",
     "compute_mae",
