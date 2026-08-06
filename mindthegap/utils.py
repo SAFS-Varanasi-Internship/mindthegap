@@ -276,7 +276,233 @@ IO_ZARR_STATS = {
 #IO_ZARR_STATS = None
 
 
-def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False, output_chunks=None, stats=None):
+def build_standardized_lazy_new(
+    ds,
+    target_variable="CHL_cmes-level3",
+    missing_flag="CHL_cmes-cloud",
+    land_flag="CHL_cmes-land",
+    features=None,
+    train_dates=None,
+    std_vars=None,
+    log_target=True,
+    missing_flag_shift=10,
+    n_temporal_lags=1,
+    output_chunks=None,
+    add_geo=False,
+):
+    """
+    Lazy, on-the-fly equivalent of ``create_zarr.data_preprocessing_new``.
+
+    This mirrors the newer preprocessing path: it builds ``full_target``,
+    ``masked_target``, true/synthetic missing flags, day-of-year sine/cosine
+    features, and optional masked-target lags directly from a raw dataset,
+    while returning a dask-backed standardized dataset ready for xbatcher /
+    TensorFlow use. Unlike the eager version, the seasonal channels are
+    broadcast to ``(time, lat, lon)`` so they can be stacked as spatial
+    model inputs without an intermediate Zarr write.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Raw dataset with ``time``, ``lat``, and ``lon`` coordinates.
+    target_variable : str, default "CHL_cmes-level3"
+        Name of the variable to use as the prediction target.
+    missing_flag : str, default "CHL_cmes-cloud"
+        Name of the variable whose value ``1`` marks true missing/cloud pixels.
+        Its time-shifted pattern is also used to build the synthetic mask.
+    land_flag : str, default "CHL_cmes-land"
+        Name of the variable whose value ``1`` marks land pixels.
+    features : sequence of str or None, default None
+        Additional predictor variables to carry through preprocessing. ``None``
+        is treated the same as an empty list.
+    train_dates : indexer or None, default None
+        Time selection used when computing standardization statistics. If
+        ``None``, all dates in ``ds`` are used.
+    std_vars : sequence of str or None, default None
+        Variables to standardize. These must be drawn from ``features`` plus
+        the derived target-like variables created by this function. If ``None``,
+        defaults to ``features``. Standardizable variables not listed here are
+        left unchanged and get identity stats (mean 0, std 1).
+    log_target : bool, default True
+        If True, apply ``log`` to positive target values before any masking or
+        standardization.
+    missing_flag_shift : int, default 10
+        Number of time steps used to shift ``missing_flag`` when creating the
+        synthetic mask pattern.
+    n_temporal_lags : int, default 1
+        Number of previous and next masked-target time steps to add as
+        ``masked_target_m{i}`` and ``masked_target_p{i}``.
+    output_chunks : dict or None, default None
+        Dask chunking for the returned dataset. ``None`` keeps the default
+        ``{"time": 100, "lat": -1, "lon": -1}``.
+    add_geo : bool, default False
+        If True, add spherical coordinate features (x_geo, y_geo, z_geo)
+        computed from lat/lon to the output dataset.
+
+    Returns
+    -------
+    ds_out : xr.Dataset
+        Lazy standardized dataset containing the engineered channels and
+        ``full_target`` label, chunked per ``output_chunks``.
+    stats : dict
+        Standardization statistics for downstream unstandardization and bundle
+        saving. Includes both the new ``full_target`` / ``masked_target`` keys
+        and compatibility aliases ``CHL`` / ``masked_CHL``.
+    """
+    features = list(features or [])
+
+    keep_vars = [target_variable] + features + [missing_flag, land_flag]
+    ds = ds[keep_vars]
+
+    for coord in ("time", "lat", "lon"):
+        if coord not in ds.coords:
+            raise ValueError(
+                f"Required coordinate '{coord}' not found in ds. Rename coords if needed."
+            )
+
+    ds_processed = ds.rename({target_variable: "full_target"})
+
+    if log_target:
+        ds_processed["full_target"] = np.log(
+            ds_processed["full_target"].where(ds_processed["full_target"] > 0)
+        )
+
+    shifted_missing_flag = ds_processed[missing_flag].roll(
+        time=-missing_flag_shift,
+        roll_coords=False,
+    )
+
+    ds_processed["masked_target"] = ds_processed["full_target"].where(
+        shifted_missing_flag != 0
+    )
+    ds_processed["true_missing_flag"] = (
+        ds_processed[missing_flag] == 1
+    ).astype("int8")
+    ds_processed["land_flag"] = (
+        ds_processed[land_flag] == 1
+    ).astype("int8")
+    ds_processed["valid_masked_target_flag"] = (
+        ds_processed["masked_target"].notnull()
+    ).astype("int8")
+    ds_processed["synthetic_missing_flag"] = (
+        (shifted_missing_flag == 0)
+        & (ds_processed["land_flag"] == 0)
+        & (ds_processed["true_missing_flag"] == 0)
+        & ds_processed["full_target"].notnull()
+    ).astype("int8")
+
+    day_of_year = ds_processed.time.dt.dayofyear
+    spatial_template = xr.ones_like(
+        ds_processed["full_target"].isel(time=0, drop=True),
+        dtype=np.float32,
+    )
+    ds_processed["day_sin"] = (
+        np.sin(2 * np.pi * day_of_year / 365.25).astype("float32")
+        * spatial_template
+    ).transpose("time", "lat", "lon")
+    ds_processed["day_cos"] = (
+        np.cos(2 * np.pi * day_of_year / 365.25).astype("float32")
+        * spatial_template
+    ).transpose("time", "lat", "lon")
+
+    # Spherical coordinates (optional, broadcast (lat, lon) to (time, lat, lon))
+    if add_geo:
+        ds_with_spherical = add_spherical_coords(ds_processed, lat="lat", lon="lon")
+        for geo_var in ["x_geo", "y_geo", "z_geo"]:
+            # Multiply (lat, lon) geo var by (time,) temporal multiplier to get (time, lat, lon)
+            ds_processed[geo_var] = (
+                xr.ones_like(day_of_year).astype("float32")
+                * ds_with_spherical[geo_var]
+            ).transpose("time", "lat", "lon")
+
+    standardizable_vars = features + ["full_target", "masked_target"]
+
+    for i in range(1, n_temporal_lags + 1):
+        prev_name = f"masked_target_m{i}"
+        next_name = f"masked_target_p{i}"
+        ds_processed[prev_name] = ds_processed["masked_target"].shift(time=i)
+        ds_processed[next_name] = ds_processed["masked_target"].shift(time=-i)
+        standardizable_vars.extend([prev_name, next_name])
+
+    if std_vars is None:
+        std_vars = list(features)
+    else:
+        std_vars = list(std_vars)
+
+    unknown_std_vars = sorted(set(std_vars) - set(standardizable_vars))
+    if unknown_std_vars:
+        raise ValueError(
+            "std_vars contains unknown variables: "
+            + ", ".join(unknown_std_vars)
+        )
+
+    mean_values = {var: 0.0 for var in standardizable_vars}
+    std_values = {var: 1.0 for var in standardizable_vars}
+
+    if std_vars:
+        stats_source = ds_processed[std_vars]
+        if train_dates is not None:
+            stats_source = stats_source.sel(time=train_dates)
+
+        computed_means = stats_source.mean(
+            dim=("time", "lat", "lon"),
+            skipna=True,
+        ).compute()
+        computed_stds = stats_source.std(
+            dim=("time", "lat", "lon"),
+            skipna=True,
+        ).compute()
+
+        for var in std_vars:
+            mean_values[var] = float(computed_means[var].item())
+            std_values[var] = float(computed_stds[var].item())
+
+    ds_standardized = ds_processed.copy()
+    for var in std_vars:
+        ds_standardized[var] = (
+            ds_processed[var] - mean_values[var]
+        ) / std_values[var]
+
+    output_vars = standardizable_vars + [
+        "day_sin",
+        "day_cos",
+    ]
+    if add_geo:
+        output_vars.extend(["x_geo", "y_geo", "z_geo"])
+    output_vars.extend([
+        "synthetic_missing_flag",
+        "true_missing_flag",
+        "valid_masked_target_flag",
+        "land_flag",
+    ])
+    if output_chunks is None:
+        output_chunks = {"time": 100, "lat": -1, "lon": -1}
+    ds_out = ds_standardized[output_vars].chunk(output_chunks)
+
+    full_target_stats = np.array(
+        [mean_values["full_target"], std_values["full_target"]],
+        dtype=np.float32,
+    )
+    masked_target_stats = np.array(
+        [mean_values["masked_target"], std_values["masked_target"]],
+        dtype=np.float32,
+    )
+    feat_stats = {
+        name: [float(mean_values[name]), float(std_values[name])]
+        for name in standardizable_vars
+        if name != "full_target"
+    }
+    stats = {
+        "full_target": full_target_stats,
+        "masked_target": masked_target_stats,
+        "CHL": full_target_stats.copy(),
+        "masked_CHL": masked_target_stats.copy(),
+        "feat_stats": feat_stats,
+    }
+    return ds_out, stats
+
+
+def build_standardized_lazy(zarr_ds, features, train_year, train_range, standardize_chl=False, use_hardcoded_stats=False, output_chunks=None, stats=None, add_geo=False):
     """
     Lazy, on-the-fly equivalent of `create_zarr.data_preprocessing` that returns a
     dask-backed standardized ``xr.Dataset`` instead of writing a Zarr store.
@@ -324,6 +550,9 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
         Must be shaped like the returned ``stats`` (``{'feat_stats': {name: [mean, std], ...},
         'CHL': [mean, std]}``). Lets several runs share one computed stats object so they
         standardize identically. Takes precedence over ``use_hardcoded_stats``.
+    add_geo : bool, default False
+        If True, add spherical coordinate features (x_geo, y_geo, z_geo)
+        computed from lat/lon to the output dataset.
 
     Returns
     -------
@@ -365,9 +594,13 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     masked_CHL = da.where(day_shift_flag == 0, np.nan, CHL_data)
     numer_features.append(masked_CHL)
 
-    prev_day = np.vstack((np.zeros((1,) + CHL_data[0].shape), CHL_data.data[:-1]))
+    #bad; need to use masked_CHL. Already dask array so no .data
+    #prev_day = np.vstack((np.zeros((1,) + CHL_data[0].shape), CHL_data.data[:-1]))
+    prev_day = np.vstack((np.zeros((1,) + masked_CHL[0].shape), masked_CHL[:-1]))
     numer_features.append(prev_day)
-    next_day = np.vstack((CHL_data.data[1:], np.zeros((1,) + CHL_data[0].shape)))
+    #bad; need to use masked_CHL. Already dask array so no .data
+    #next_day = np.vstack((CHL_data.data[1:], np.zeros((1,) + CHL_data[0].shape)))
+    next_day = np.vstack((masked_CHL[1:], np.zeros((1,) + masked_CHL[0].shape)))
     numer_features.append(next_day)
 
     # categorical flags (NOT standardized)
@@ -388,6 +621,27 @@ def build_standardized_lazy(zarr_ds, features, train_year, train_range, standard
     cat_features.append(fake_cloud_flag)
 
     numer_var_names = list(features) + ['sin_time', 'cos_time', 'masked_CHL', 'prev_day_CHL', 'next_day-CHL']
+    
+    # Spherical coordinates (optional, 2D lat/lon grid broadcast to 3D time series)
+    if add_geo:
+        lat2d, lon2d = np.meshgrid(zarr_ds.lat.values, zarr_ds.lon.values, indexing='ij')
+        psi = np.deg2rad(lat2d)
+        lam = np.deg2rad(lon2d)
+        
+        x_geo = np.cos(psi) * np.cos(lam)
+        y_geo = np.cos(psi) * np.sin(lam)
+        z_geo = np.sin(psi)
+        
+        # Broadcast (lat, lon) -> (time, lat, lon) and convert to dask
+        x_geo_3d = da.from_array(np.tile(x_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *x_geo.shape))
+        y_geo_3d = da.from_array(np.tile(y_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *y_geo.shape))
+        z_geo_3d = da.from_array(np.tile(z_geo[np.newaxis, :, :], (len(zarr_ds.time), 1, 1)), chunks=(100, *z_geo.shape))
+        
+        numer_features.append(x_geo_3d)
+        numer_features.append(y_geo_3d)
+        numer_features.append(z_geo_3d)
+        numer_var_names.extend(['x_geo', 'y_geo', 'z_geo'])
+    
     cat_var_names = ['land_flag', 'real_cloud_flag', 'valid_CHL_flag', 'fake_cloud_flag']
 
     # Numerical-predictor mean/std: a passed-in stats dict (shared across runs, no data read),
@@ -532,3 +786,75 @@ def UNet(input_shape):
     model = tf.keras.Model(inputs, outputs, name='U-net')
     model.compile(optimizer='adam', loss='mse', metrics=['mae'])
     return model
+
+
+def add_spherical_coords(obj, lat="lat", lon="lon"):
+    """
+    Add 3D unit-sphere coordinates (x_geo, y_geo, z_geo) computed from lat/lon.
+
+    - If `obj` is an xarray.Dataset:
+        * Assumes `lat` and `lon` are 1D coordinates.
+        * Broadcasts to 2D over (lat, lon) and keeps Dask laziness.
+        * Returns an xarray.Dataset with x_geo, y_geo, z_geo variables.
+
+    - If `obj` is a pandas.DataFrame:
+        * Assumes `lat` and `lon` are columns.
+        * Computes per-row x_geo, y_geo, z_geo columns.
+        * Returns a new DataFrame (original is not modified in place).
+
+    Parameters
+    ----------
+    obj : xarray.Dataset or pandas.DataFrame
+    lat : str
+        Name of latitude coordinate/column in degrees.
+    lon : str
+        Name of longitude coordinate/column in degrees.
+
+    Returns
+    -------
+    xarray.Dataset or pandas.DataFrame
+    """
+    # ---- xarray path --------------------------------------------------------
+    if isinstance(obj, xr.Dataset):
+        ds = obj
+
+        # 2D lat/lon (lazy if dask)
+        lat2d, lon2d = xr.broadcast(ds[lat], ds[lon])   # (lat, lon), (lat, lon)
+
+        # radians (lazy)
+        psi = xr.apply_ufunc(np.deg2rad, lat2d, dask="parallelized")
+        lam = xr.apply_ufunc(np.deg2rad, lon2d, dask="parallelized")
+
+        x_geo = xr.apply_ufunc(np.cos, psi, dask="parallelized") * xr.apply_ufunc(np.cos, lam, dask="parallelized")
+        y_geo = xr.apply_ufunc(np.cos, psi, dask="parallelized") * xr.apply_ufunc(np.sin, lam, dask="parallelized")
+        z_geo = xr.apply_ufunc(np.sin, psi, dask="parallelized")
+
+        return ds.assign(
+            x_geo=x_geo.astype("float32"),
+            y_geo=y_geo.astype("float32"),
+            z_geo=z_geo.astype("float32"),
+        )
+
+    # ---- pandas path --------------------------------------------------------
+    if isinstance(obj, pd.DataFrame):
+        df = obj.copy()
+
+        # radians (vectorized numpy on Series)
+        psi = np.deg2rad(df[lat].to_numpy())
+        lam = np.deg2rad(df[lon].to_numpy())
+
+        x_geo = np.cos(psi) * np.cos(lam)
+        y_geo = np.cos(psi) * np.sin(lam)
+        z_geo = np.sin(psi)
+
+        df["x_geo"] = x_geo.astype("float32")
+        df["y_geo"] = y_geo.astype("float32")
+        df["z_geo"] = z_geo.astype("float32")
+
+        return df
+
+    # ---- unsupported type ---------------------------------------------------
+    raise TypeError(
+        f"add_spherical_coords expected xarray.Dataset or pandas.DataFrame, "
+        f"got {type(obj)}"
+    )

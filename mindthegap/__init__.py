@@ -7,6 +7,7 @@ from .utils import (
     compute_mse,
     make_tf_gen,
     build_standardized_lazy,
+    build_standardized_lazy_new,
     make_xbatcher,
     UNet,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "compute_mse",
     "make_tf_gen",
     "build_standardized_lazy",
+    "build_standardized_lazy_new",
     "make_xbatcher",
     "UNet",
     # patching

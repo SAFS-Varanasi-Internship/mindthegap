@@ -7,3 +7,5 @@ data/
 Untitled*
 
 *.egg-info
+
+__pycache__/
