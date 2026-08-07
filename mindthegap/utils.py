@@ -487,12 +487,19 @@ def build_standardized_lazy(
     n_temporal_lags=1,
     output_chunks=None,
     add_geo=False,
+    options=None,
 ):
     """Build lazy model inputs, targets, and standardization statistics.
 
     The returned dataset contains the transformed target, a synthetically masked
     target, temporal target lags, seasonal channels, missingness flags, optional
     feature variables, and optional spherical coordinates.
+
+    Returns ``(output, stats)``. When ``options`` (a :class:`DataOptions`) is
+    provided it is populated in place with the canonical resolved data
+    configuration (bounds, input channel names/order, transforms, and
+    standardization statistics) so downstream functions and the saved model
+    bundle can reproduce these inputs.
     """
     features = list(features or [])
     required = [target_variable, *features, missing_flag, land_flag]
@@ -616,12 +623,60 @@ def build_standardized_lazy(
         )
         for name in standardizable_vars
     }
+
+    if options is not None:
+        input_names = [name for name in output_vars if name != "full_target"]
+        options.target = "full_target"
+        options.lat_bounds = (
+            float(output["lat"].min()),
+            float(output["lat"].max()),
+        )
+        options.lon_bounds = (
+            float(output["lon"].min()),
+            float(output["lon"].max()),
+        )
+        options.input_names = input_names
+        options.transforms = {
+            "target": "natural logarithm" if log_target else "none",
+            "temporal_lags": n_temporal_lags,
+            "add_geo": bool(add_geo),
+        }
+        options.standardization = {
+            name: {
+                "mean": float(means[name]),
+                "std": float(standard_deviations[name]),
+                "applied": name in std_vars,
+            }
+            for name in standardizable_vars
+        }
+        options.missing_value_handling = (
+            "Missing predictor values are replaced with zero after "
+            "standardization; mask channels identify land and missing data."
+        )
+
     return output, stats
 
 
-def make_xbatcher(ds, patch_dims, overlap=None, preload_batch=False):
-    """Create an xbatcher generator over time and spatial windows."""
+def make_xbatcher(
+    ds,
+    patch_dims=None,
+    overlap=None,
+    preload_batch=False,
+    options=None,
+):
+    """Create an xbatcher generator over time and spatial windows.
+
+    Either pass ``patch_dims``/``overlap`` explicitly or pass a
+    :class:`GridderOptions` as ``options`` to derive them.
+    """
     import xbatcher as xb
+
+    if options is not None:
+        patch_dims = options.patch_dims()
+        overlap = options.overlap_dims()
+        preload_batch = options.preload_batch
+    if patch_dims is None:
+        raise ValueError("provide either patch_dims or options")
 
     kwargs = {
         "ds": ds,
@@ -708,3 +763,59 @@ def UNet(input_shape):
     model = tf.keras.Model(inputs, outputs, name="U-net")
     model.compile(optimizer="adam", loss="mse", metrics=["mae"])
     return model
+
+
+def fit_model(
+    model,
+    train_data,
+    options,
+    *,
+    validation_data=None,
+    steps_per_epoch=None,
+    validation_steps=None,
+    callbacks=None,
+    verbose=1,
+):
+    """Fit a model using a :class:`FitOptions` configuration section.
+
+    ``options`` supplies epochs, batch size, learning rate, patience, loss, and
+    optimizer so these choices are not threaded individually through the
+    pipeline. Returns the Keras ``History`` object.
+    """
+    import tensorflow as tf
+
+    optimizers = {
+        "adam": tf.keras.optimizers.Adam,
+    }
+    if options.optimizer not in optimizers:
+        raise ValueError(
+            f"Unsupported optimizer {options.optimizer!r}; "
+            f"choose from: {', '.join(optimizers)}"
+        )
+    model.compile(
+        optimizer=optimizers[options.optimizer](
+            learning_rate=options.learning_rate
+        ),
+        loss=options.loss,
+        jit_compile=False,
+    )
+
+    if callbacks is None:
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss",
+                patience=options.patience,
+                restore_best_weights=True,
+                verbose=verbose,
+            )
+        ]
+
+    return model.fit(
+        train_data,
+        epochs=options.epochs,
+        steps_per_epoch=steps_per_epoch,
+        validation_data=validation_data,
+        validation_steps=validation_steps,
+        callbacks=callbacks,
+        verbose=verbose,
+    )

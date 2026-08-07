@@ -166,3 +166,37 @@ def test_load_rejects_incomplete_bundle(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="model_metadata.yaml"):
         load_model_bundle(bundle_path)
+
+
+def test_metadata_includes_resolved_options(tmp_path):
+    from mindthegap import Options
+
+    options = Options.default()
+    options.data.target = "full_target"
+    options.data.input_names = ["masked_target"]
+    bundle_path = tmp_path / "bundle"
+
+    _create_metadata(bundle_path)
+    metadata_path = create_model_bundle_metadata(
+        bundle_path,
+        model_name="test-gap-model",
+        dataset_name="test product",
+        product_id="test-id",
+        region="test region",
+        training_period="2020-01-01 to 2020-01-31",
+        input_names=["channel_a"],
+        target_name="chlor_a",
+        target_units="mg m-3",
+        expected_input_shape=[None, 1],
+        transforms=[],
+        standardization={},
+        missing_value_handling="Replace NaN inputs with zero.",
+        options=options,
+        overwrite=True,
+    )
+
+    saved = yaml.safe_load(metadata_path.read_text())
+    assert saved["options"]["data"]["target"] == "full_target"
+    assert saved["options"]["fit"]["epochs"] == 50
+    assert Options.from_dict(saved["options"]) == options
+

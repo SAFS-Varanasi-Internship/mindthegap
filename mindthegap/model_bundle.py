@@ -159,6 +159,7 @@ def create_model_bundle_metadata(
     missing_value_handling,
     model_version="1.0",
     limitations=None,
+    options=None,
     overwrite=False,
 ):
     """Create and save reviewable inference metadata for a model bundle."""
@@ -224,6 +225,10 @@ def create_model_bundle_metadata(
         ),
         "source": _source_metadata(),
     }
+    if options is not None:
+        metadata["options"] = _native(
+            options.to_dict() if hasattr(options, "to_dict") else options
+        )
     prepared = _native(metadata)
     _validate_metadata(prepared)
     with metadata_path.open("w", encoding="utf-8") as file:
