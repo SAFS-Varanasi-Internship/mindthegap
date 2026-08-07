@@ -28,6 +28,19 @@ def test_demo_data_is_deterministic():
     assert first_metadata == second_metadata
 
 
+def test_demo_data_smoke_test_caps_synthetic_size():
+    ds, _ = demo_data(
+        days=300,
+        lat_size=200,
+        lon_size=200,
+        smoke_test=True,
+        smoke_days=30,
+        smoke_size=32,
+    )
+
+    assert ds.sizes == {"time": 30, "lat": 32, "lon": 32}
+
+
 def test_demo_data_applies_region_and_time_slice():
     ds, metadata = demo_data(
         region=[10, 25, 50, 70],

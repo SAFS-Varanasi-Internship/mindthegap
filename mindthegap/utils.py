@@ -19,6 +19,9 @@ def demo_data(
     region=None,
     time_slice=None,
     *,
+    smoke_test=False,
+    smoke_days=120,
+    smoke_size=128,
     days=120,
     lat_size=16,
     lon_size=16,
@@ -32,6 +35,13 @@ def demo_data(
     ``"indian-ocean"``, or ``"synthetic"``. ``region`` may be a supported
     name or ``[lat_min, lat_max, lon_min, lon_max]``. ``None`` selects the
     full spatial extent.
+
+    When ``smoke_test`` is true, the loaded dataset is subset to at most
+    ``smoke_days`` time steps and ``smoke_size`` cells in each spatial
+    dimension so remote validation runs stay small. The synthetic loader is
+    generated at that reduced size directly. Sizing of the synthetic dataset is
+    controlled by ``smoke_days``/``smoke_size`` (or the defaults) rather than by
+    callers threading ``days``/``lat_size``/``lon_size`` from a notebook.
     """
     loaders = {
         "pace": _load_pace,
@@ -44,6 +54,10 @@ def demo_data(
         raise ValueError(f"Unknown dataset {dataset!r}; choose from: {choices}")
 
     if dataset == "synthetic":
+        if smoke_test:
+            days = min(days, smoke_days)
+            lat_size = min(lat_size, smoke_size)
+            lon_size = min(lon_size, smoke_size)
         ds = loaders[dataset](
             days=days,
             lat_size=lat_size,
@@ -54,6 +68,12 @@ def demo_data(
         )
     else:
         ds = loaders[dataset]()
+        if smoke_test:
+            ds = ds.isel(
+                time=slice(0, min(smoke_days, ds.sizes["time"])),
+                lat=slice(0, min(smoke_size, ds.sizes["lat"])),
+                lon=slice(0, min(smoke_size, ds.sizes["lon"])),
+            )
 
     region_bounds, region_name = _resolve_region(region)
     ds = _select_demo_subset(
@@ -476,15 +496,15 @@ def _add_spherical_coords(ds, lat="lat", lon="lon"):
 
 def build_standardized_lazy(
     ds,
-    target_variable="CHL_cmes-level3",
-    missing_flag="CHL_cmes-cloud",
-    land_flag="CHL_cmes-land",
+    target_variable=None,
+    missing_flag=None,
+    land_flag=None,
     features=None,
     train_dates=None,
     std_vars=None,
-    log_target=True,
+    log_target=None,
     missing_flag_shift=10,
-    n_temporal_lags=1,
+    n_temporal_lags=None,
     output_chunks=None,
     add_geo=False,
     options=None,
@@ -496,11 +516,38 @@ def build_standardized_lazy(
     feature variables, and optional spherical coordinates.
 
     Returns ``(output, stats)``. When ``options`` (a :class:`DataOptions`) is
-    provided it is populated in place with the canonical resolved data
-    configuration (bounds, input channel names/order, transforms, and
-    standardization statistics) so downstream functions and the saved model
-    bundle can reproduce these inputs.
+    provided, variable names, ``features``, ``log_target``, and
+    ``n_temporal_lags`` default to the values already resolved on it, so callers
+    do not repeat them. ``options`` is then populated in place with the
+    canonical resolved data configuration (bounds, input channel names/order,
+    transforms, standardization statistics, and target mean/std) so downstream
+    functions and the saved model bundle can reproduce these inputs.
     """
+    if options is not None:
+        target_variable = (
+            target_variable
+            if target_variable is not None
+            else options.target_variable
+        )
+        missing_flag = (
+            missing_flag if missing_flag is not None else options.missing_flag
+        )
+        land_flag = land_flag if land_flag is not None else options.land_flag
+        if features is None:
+            features = options.features
+        if log_target is None:
+            log_target = options.log_target
+        if n_temporal_lags is None:
+            n_temporal_lags = options.n_temporal_lags
+
+    if target_variable is None or missing_flag is None or land_flag is None:
+        raise ValueError(
+            "target_variable, missing_flag, and land_flag must be provided "
+            "either directly or via options"
+        )
+    log_target = True if log_target is None else log_target
+    n_temporal_lags = 1 if n_temporal_lags is None else n_temporal_lags
+
     features = list(features or [])
     required = [target_variable, *features, missing_flag, land_flag]
     missing = [name for name in required if name not in ds]
@@ -636,6 +683,8 @@ def build_standardized_lazy(
             float(output["lon"].max()),
         )
         options.input_names = input_names
+        options.log_target = bool(log_target)
+        options.n_temporal_lags = n_temporal_lags
         options.transforms = {
             "target": "natural logarithm" if log_target else "none",
             "temporal_lags": n_temporal_lags,
@@ -649,6 +698,8 @@ def build_standardized_lazy(
             }
             for name in standardizable_vars
         }
+        options.target_mean = float(means["full_target"])
+        options.target_std = float(standard_deviations["full_target"])
         options.missing_value_handling = (
             "Missing predictor values are replaced with zero after "
             "standardization; mask channels identify land and missing data."

@@ -72,6 +72,55 @@ def test_set_config_resolves_all_sections():
     assert options.data.training_period == options.split.training_period()
 
 
+def test_set_data_config_populates_data_from_metadata():
+    ds, metadata = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
+    options = Options.default()
+
+    result = options.set_data_config(data=ds, metadata=metadata)
+
+    assert result is options
+    assert options.data.source == metadata["dataset"]["name"]
+    assert options.data.target_variable == "chlor_a"
+    assert options.data.target_name == "chlor_a"
+    assert options.data.missing_flag == "cloud_flag"
+    assert options.data.land_flag == "land_flag"
+    assert options.data.lat_bounds is not None
+    # non-data sections are resolved too
+    assert options.gridder.tile_size == (16, 16)
+    assert options.split.short_run is True
+
+
+def test_default_with_data_resolves_configuration():
+    ds, metadata = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
+
+    options = Options.default(data=ds, metadata=metadata)
+
+    assert options.data.target_variable == "chlor_a"
+    assert options.gridder.tile_size == (16, 16)
+
+
+def test_build_standardized_lazy_reads_config_from_options():
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default()
+    options.data.log_target = False
+    options.data.n_temporal_lags = 2
+    options.set_data_config(data=ds, metadata=metadata)
+
+    from mindthegap import build_standardized_lazy
+
+    _, stats = build_standardized_lazy(
+        ds,
+        std_vars=options.data.features,
+        options=options.data,
+    )
+
+    assert options.data.is_resolved()
+    assert options.data.transforms["temporal_lags"] == 2
+    assert options.data.transforms["target"] == "none"
+    assert options.data.target_mean == float(stats["full_target"][0])
+    assert options.data.target_std == float(stats["full_target"][1])
+
+
 def test_set_config_roundtrips_through_dict():
     ds, _ = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default().set_config(ds)

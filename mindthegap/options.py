@@ -247,22 +247,72 @@ class DataOptions:
     lat_bounds: Optional[tuple] = None
     lon_bounds: Optional[tuple] = None
     target: Optional[str] = None
+    target_name: Optional[str] = None
     target_units: Optional[str] = None
+    target_variable: Optional[str] = None
+    missing_flag: Optional[str] = None
+    land_flag: Optional[str] = None
+    features: list = field(default_factory=list)
+    log_target: bool = True
+    n_temporal_lags: int = 1
     input_names: list = field(default_factory=list)
     transforms: dict = field(default_factory=dict)
     standardization: dict = field(default_factory=dict)
+    target_mean: Optional[float] = None
+    target_std: Optional[float] = None
     missing_value_handling: Optional[str] = None
+    available_period: Optional[str] = None
     training_period: Optional[str] = None
+    region_name: Optional[str] = None
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.lat_bounds = _coerce_bounds(self.lat_bounds, "lat_bounds")
         self.lon_bounds = _coerce_bounds(self.lon_bounds, "lon_bounds")
         self.input_names = list(self.input_names)
+        self.features = list(self.features)
 
     def is_resolved(self):
         """Return ``True`` once the pipeline has populated the target/inputs."""
         return self.target is not None and bool(self.input_names)
+
+    def load_from(self, ds, metadata):
+        """Populate identity/variable configuration from a dataset + metadata.
+
+        ``metadata`` is the mapping returned alongside the dataset by
+        :func:`mindthegap.demo_data`. This records the values that can be
+        inferred from the loaded data (source identity, variable names,
+        spatial bounds, available period) so notebooks do not have to unpack
+        the metadata dict into floating variables. Standardization statistics
+        and input channel order are filled in later by
+        :func:`mindthegap.build_standardized_lazy`.
+        """
+        dataset_info = metadata.get("dataset", {})
+        target_info = metadata.get("target", {})
+        variables = metadata.get("variables", {})
+
+        self.source = dataset_info.get("name")
+        self.product_id = dataset_info.get("product_id")
+        self.available_period = dataset_info.get("available_period")
+        if "region_name" in dataset_info:
+            self.region_name = dataset_info["region_name"]
+
+        self.target_variable = variables.get("target")
+        self.target_name = target_info.get("name")
+        self.missing_flag = variables.get("missing_flag")
+        self.land_flag = variables.get("land_flag")
+        self.features = list(variables.get("features", []))
+        self.target_units = target_info.get("units")
+
+        self.lat_bounds = (
+            float(ds["lat"].min()),
+            float(ds["lat"].max()),
+        )
+        self.lon_bounds = (
+            float(ds["lon"].min()),
+            float(ds["lon"].max()),
+        )
+        return self
 
     @classmethod
     def from_dict(cls, data):
@@ -287,21 +337,40 @@ class Options:
     data: DataOptions = field(default_factory=DataOptions)
 
     @classmethod
-    def default(cls):
+    def default(cls, data=None, metadata=None):
         """Return a valid initial configuration with default fitting values.
 
-        ``data`` starts unresolved and is populated by the pipeline.
+        ``data`` starts unresolved and is populated by the pipeline. When a
+        loaded dataset ``data`` (and its ``metadata``) is supplied, the
+        data-dependent sections are resolved immediately via
+        :meth:`set_data_config`.
         """
-        return cls()
+        options = cls()
+        if data is not None:
+            options.set_data_config(data=data, metadata=metadata)
+        return options
+
+    def set_data_config(self, data, metadata=None):
+        """Resolve all data-dependent configuration from a dataset.
+
+        Populates ``options.data`` from the dataset and its loader
+        ``metadata`` (variable names, identity, bounds, available period), then
+        derives the gridder, split, and fit sections from the dataset via
+        :meth:`set_config`. Returns ``self`` for chaining. Call after the
+        dataset is loaded and cropped.
+        """
+        if metadata is not None:
+            self.data.load_from(data, metadata)
+        self.set_config(data)
+        return self
 
     def set_config(self, ds):
-        """Resolve dataset-dependent configuration from ``ds`` in place.
+        """Resolve dataset-derived heuristics for the non-data sections.
 
         Derives tile size and time chunk (``gridder``), the train/validation
         split (``split``), and the batch size and training schedule (``fit``)
         from the dataset so these heuristics live in the package rather than in
-        notebooks. Returns ``self`` for chaining. Call after the dataset is
-        loaded, cropped, and any smoke-test subsetting is applied.
+        notebooks. Returns ``self`` for chaining.
         """
         self.gridder = self.gridder.resolve_for(ds)
         self.split = self.split.resolve_for(ds)
