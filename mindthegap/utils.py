@@ -1,5 +1,6 @@
 from typing import Union
 from numbers import Real
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -508,21 +509,28 @@ def build_standardized_lazy(
     output_chunks=None,
     add_geo=False,
     options=None,
+    gridder=None,
 ):
     """Build lazy model inputs, targets, and standardization statistics.
 
     The returned dataset contains the transformed target, a synthetically masked
     target, temporal target lags, seasonal channels, missingness flags, optional
-    feature variables, and optional spherical coordinates.
+    feature variables, and optional spherical coordinates. If output_chunks is not 
+    None, then a dask array with output_chunks chunking is returned.
 
     Returns ``(output, stats)``. When ``options`` (a :class:`DataOptions`) is
     provided, variable names, ``features``, ``log_target``, and
     ``n_temporal_lags`` default to the values already resolved on it, so callers
-    do not repeat them. ``options`` is then populated in place with the
-    canonical resolved data configuration (bounds, input channel names/order,
-    transforms, standardization statistics, and target mean/std) so downstream
-    functions and the saved model bundle can reproduce these inputs.
+    do not repeat them; ``std_vars`` defaults to ``options.features`` (features
+    are standardized, the target is not). When a ``gridder``
+    (:class:`GridderOptions`) is provided, ``output_chunks`` defaults to that
+    gridder's tile/time layout for efficient xbatcher reads. ``options`` is then
+    populated in place with the canonical resolved data configuration (bounds,
+    input channel names/order, transforms, standardization statistics, and
+    target mean/std) so downstream functions and the saved model bundle can
+    reproduce these inputs.
     """
+    std_vars_supplied = std_vars is not None
     if options is not None:
         target_variable = (
             target_variable
@@ -540,12 +548,19 @@ def build_standardized_lazy(
         if n_temporal_lags is None:
             n_temporal_lags = options.n_temporal_lags
 
+    if gridder is not None and output_chunks is None:
+        output_chunks = {
+            "time": gridder.time_chunk,
+            "lat": gridder.tile_size[0],
+            "lon": gridder.tile_size[1],
+        }
+
     if target_variable is None or missing_flag is None or land_flag is None:
         raise ValueError(
             "target_variable, missing_flag, and land_flag must be provided "
             "either directly or via options"
         )
-    log_target = True if log_target is None else log_target
+    log_target = False if log_target is None else log_target
     n_temporal_lags = 1 if n_temporal_lags is None else n_temporal_lags
 
     features = list(features or [])
@@ -619,7 +634,10 @@ def build_standardized_lazy(
         processed[following] = processed["masked_target"].shift(time=-lag)
         standardizable_vars.extend([previous, following])
 
-    std_vars = list(features if std_vars is None else std_vars)
+    if std_vars_supplied:
+        std_vars = list(std_vars or [])
+    else:
+        std_vars = list(features)
     unknown = sorted(set(std_vars) - set(standardizable_vars))
     if unknown:
         raise ValueError(
@@ -737,6 +755,253 @@ def make_xbatcher(
     if overlap is not None:
         kwargs["input_overlap"] = dict(overlap)
     return xb.BatchGenerator(**kwargs)
+
+
+def _random_train_val_indices(
+    dates,
+    n_train,
+    n_val,
+    min_day_difference=2,
+    seed=None,
+):
+    """Return training and validation indices into the original date array.
+
+    All selected dates, across both training and validation, differ by at least
+    ``min_day_difference`` calendar days. For example, ``min_day_difference=2``
+    allows Jan 1 and Jan 3.
+    """
+    dates = pd.to_datetime(np.asarray(dates))
+    if dates.isna().any():
+        raise ValueError("The date array contains missing datetime values.")
+    if dates.has_duplicates:
+        raise ValueError("The date array contains duplicate dates.")
+
+    sort_order = np.argsort(dates.values)
+    sorted_dates = dates[sort_order]
+    sorted_days = sorted_dates.values.astype("datetime64[D]")
+
+    n_dates = len(sorted_dates)
+    n_total = n_train + n_val
+
+    next_valid = np.searchsorted(
+        sorted_days,
+        sorted_days + np.timedelta64(min_day_difference, "D"),
+        side="left",
+    )
+
+    max_n = 0
+    i = 0
+    while i < n_dates:
+        max_n += 1
+        i = next_valid[i]
+
+    if n_total > max_n:
+        raise ValueError(
+            f"Requested {n_total} dates, but at most {max_n} can be "
+            f"sampled with a {min_day_difference}-day minimum difference."
+        )
+
+    dp = [[0] * (n_total + 1) for _ in range(n_dates + 1)]
+    for i in range(n_dates + 1):
+        dp[i][0] = 1
+    for i in range(n_dates - 1, -1, -1):
+        for k in range(1, n_total + 1):
+            dp[i][k] = dp[i + 1][k] + dp[next_valid[i]][k - 1]
+
+    rng = np.random.default_rng(seed)
+    selected_sorted_indices = []
+    i = 0
+    k = n_total
+    while k > 0:
+        skip_count = dp[i + 1][k]
+        take_count = dp[next_valid[i]][k - 1]
+        total_count = skip_count + take_count
+        if rng.random() < take_count / total_count:
+            selected_sorted_indices.append(i)
+            i = next_valid[i]
+            k -= 1
+        else:
+            i += 1
+
+    selected_indices = sort_order[selected_sorted_indices]
+    selected_indices = rng.permutation(selected_indices)
+    train_indices = np.sort(selected_indices[:n_train])
+    val_indices = np.sort(selected_indices[n_train:])
+    return train_indices, val_indices, max_n
+
+
+def train_validation_dates(
+    times,
+    options,
+    *,
+    method="random",
+    train_fraction=0.5,
+    val_fraction=0.25,
+    n_train=None,
+    n_val=None,
+    train_slice=None,
+    val_slice=None,
+    min_day_difference=None,
+    seed=None,
+):
+    """Choose training and validation dates and record them on ``options``.
+
+    ``times`` is the dataset time coordinate (e.g. ``ds.time``). ``options`` is
+    the :class:`SplitOptions` section (``options.split``); its ``train_dates``
+    and ``val_dates`` are populated with the selected ISO date strings and its
+    ``method`` is recorded. Returns ``options``.
+
+    ``method="random"`` samples spaced-out dates for train/validation using
+    ``min_day_difference`` (defaults to ``options.min_day_difference``); the
+    counts come from ``n_train``/``n_val`` or from ``train_fraction`` /
+    ``val_fraction`` of the record. ``method="manual"`` selects dates falling in
+    ``train_slice`` and ``val_slice`` (``slice("1997-01-01", "2000-01-01")``);
+    it raises if a slice selects no dates.
+    """
+    dates = pd.to_datetime(np.asarray(getattr(times, "values", times)))
+
+    if method == "random":
+        difference = (
+            min_day_difference
+            if min_day_difference is not None
+            else options.min_day_difference
+        )
+        total = len(dates)
+        if n_train is None:
+            n_train = max(1, int(total * train_fraction))
+        if n_val is None:
+            n_val = max(1, int(total * val_fraction))
+        train_idx, val_idx, _ = _random_train_val_indices(
+            dates,
+            n_train,
+            n_val,
+            min_day_difference=difference,
+            seed=seed if seed is not None else options.seed,
+        )
+        train_dates = dates[train_idx]
+        val_dates = dates[val_idx]
+        options.min_day_difference = difference
+    elif method == "manual":
+        if train_slice is None or val_slice is None:
+            raise ValueError(
+                "method='manual' requires train_slice and val_slice"
+            )
+        index = pd.DatetimeIndex(dates)
+        train_dates = index[
+            (index >= pd.to_datetime(train_slice.start))
+            & (index <= pd.to_datetime(train_slice.stop))
+        ]
+        val_dates = index[
+            (index >= pd.to_datetime(val_slice.start))
+            & (index <= pd.to_datetime(val_slice.stop))
+        ]
+        if len(train_dates) == 0:
+            raise ValueError(
+                f"train_slice {train_slice.start} to {train_slice.stop} "
+                "selects no dates in the dataset time range "
+                f"({dates.min().date()} to {dates.max().date()})"
+            )
+        if len(val_dates) == 0:
+            raise ValueError(
+                f"val_slice {val_slice.start} to {val_slice.stop} "
+                "selects no dates in the dataset time range "
+                f"({dates.min().date()} to {dates.max().date()})"
+            )
+    else:
+        raise ValueError(
+            f"Unknown method {method!r}; choose 'random' or 'manual'"
+        )
+
+    options.method = method
+    options.train_dates = [str(d.date()) for d in pd.to_datetime(train_dates)]
+    options.val_dates = [str(d.date()) for d in pd.to_datetime(val_dates)]
+    if seed is not None:
+        options.seed = seed
+    return options
+
+
+def make_generator(ds_std, options):
+    """Build train/validation TensorFlow datasets from a standardized dataset.
+
+    ``options`` is the full :class:`Options` object. The training and validation
+    dates come from ``options.split``, the tiling from ``options.gridder``, the
+    channel order/target from ``options.data``, and batching from
+    ``options.fit``. Returns ``(train_dataset, val_dataset, train_steps,
+    val_steps)`` so the notebook does not manage the intermediate ``ds_train`` /
+    ``ds_val`` or step counts.
+    """
+    import tensorflow as tf
+
+    if not options.split.is_resolved():
+        raise ValueError(
+            "options.split has no dates; call mtg.train_validation_dates first"
+        )
+    if options.gridder.method != "xbatcher":
+        raise ValueError(
+            f"Unsupported gridder method {options.gridder.method!r}; "
+            "only 'xbatcher' is currently supported"
+        )
+
+    ds_train = ds_std.sel(time=options.split.train_selection())
+    ds_val = ds_std.sel(time=options.split.val_selection())
+
+    # Selected dates may be sparse (random) or a short manual window, so cap the
+    # temporal patch length at the number of available time steps in each split.
+    train_gridder = replace(
+        options.gridder,
+        time_chunk=min(options.gridder.time_chunk, ds_train.sizes["time"]),
+    )
+    val_gridder = replace(
+        options.gridder,
+        time_chunk=min(options.gridder.time_chunk, ds_val.sizes["time"]),
+    )
+    train_batcher = make_xbatcher(ds_train, options=train_gridder)
+    val_batcher = make_xbatcher(ds_val, options=val_gridder)
+
+    num_channels = len(options.data.input_names)
+    tile_lat, tile_lon = options.gridder.tile_size
+    output_signature = (
+        tf.TensorSpec(
+            shape=(tile_lat, tile_lon, num_channels), dtype=tf.float32
+        ),
+        tf.TensorSpec(shape=(tile_lat, tile_lon, 1), dtype=tf.float32),
+    )
+
+    train_dataset = (
+        tf.data.Dataset.from_generator(
+            make_tf_gen(
+                train_batcher,
+                options.data.input_names,
+                label=options.data.target,
+            ),
+            output_signature=output_signature,
+        )
+        .shuffle(options.fit.shuffle_buffer)
+        .batch(options.fit.batch_size)
+        .repeat()
+        .prefetch(tf.data.AUTOTUNE)
+    )
+    val_dataset = (
+        tf.data.Dataset.from_generator(
+            make_tf_gen(
+                val_batcher,
+                options.data.input_names,
+                label=options.data.target,
+            ),
+            output_signature=output_signature,
+        )
+        .batch(options.fit.batch_size)
+        .repeat()
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+    train_steps = max(
+        1, (len(train_batcher) * train_gridder.time_chunk) // options.fit.batch_size
+    )
+    val_steps = max(
+        1, (len(val_batcher) * val_gridder.time_chunk) // options.fit.batch_size
+    )
+    return train_dataset, val_dataset, train_steps, val_steps
 
 
 def UNet(input_shape):

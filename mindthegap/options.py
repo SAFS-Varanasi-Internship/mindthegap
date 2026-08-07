@@ -75,7 +75,6 @@ class GridderOptions:
             )
         if self.time_chunk <= 0:
             raise ValueError("time_chunk must be a positive integer")
-
     def _tile_length(self, size, chunk):
         """Largest tile length that fits the data, chunk, and cap."""
         available = min(size, chunk, self.tile_upper_limit)
@@ -139,8 +138,6 @@ class FitOptions:
     optimizer: str = "adam"
     shuffle_buffer: int = 512
     pixel_budget: int = 40 * 56 * 16
-    short_run_epochs: int = 2
-    short_run_patience: int = 2
 
     def __post_init__(self):
         if self.epochs <= 0:
@@ -152,22 +149,15 @@ class FitOptions:
         if self.patience < 0:
             raise ValueError("patience must be non-negative")
 
-    def resolve_for(self, tile_size, *, short_run):
-        """Return a copy with batch size and schedule derived from context.
+    def resolve_for(self, tile_size):
+        """Return a copy with ``batch_size`` scaled to the tile pixel budget.
 
         ``batch_size`` is capped so ``batch_size * tile_pixels`` stays within
-        ``pixel_budget``. Short records use the reduced epoch/patience schedule.
+        ``pixel_budget``.
         """
         pixels_per_tile = max(1, tile_size[0] * tile_size[1])
         batch_size = max(1, min(16, self.pixel_budget // pixels_per_tile))
-        epochs = self.short_run_epochs if short_run else self.epochs
-        patience = self.short_run_patience if short_run else self.patience
-        return replace(
-            self,
-            batch_size=batch_size,
-            epochs=epochs,
-            patience=patience,
-        )
+        return replace(self, batch_size=batch_size)
 
     @classmethod
     def from_dict(cls, data):
@@ -176,53 +166,42 @@ class FitOptions:
 
 @dataclass
 class SplitOptions:
-    """Train/validation/test temporal split, resolved from the dataset.
+    """Train/validation temporal split as explicit selected dates.
 
-    ``short_run_days`` selects between a 50/25/25 split for short records and a
-    fixed train/validation window (in years) for longer ones. Resolved values
-    are stored as ISO date strings so they serialize cleanly.
+    ``train_dates`` and ``val_dates`` are the resolved date selections (ISO
+    strings) used to subset the standardized dataset. They are produced by
+    :func:`mindthegap.train_validation_dates`, not by an implicit heuristic, so
+    the split strategy is not configured until the user chooses one.
+    ``method`` records how they were produced (``"random"`` or ``"manual"``).
     """
 
-    train_start: Optional[str] = None
-    train_end: Optional[str] = None
-    val_end: Optional[str] = None
-    short_run: Optional[bool] = None
-    short_run_days: int = 120
-    train_years: int = 3
-    val_years: int = 1
+    method: Optional[str] = None
+    train_dates: list = field(default_factory=list)
+    val_dates: list = field(default_factory=list)
+    min_day_difference: int = 1
+    seed: Optional[int] = None
 
-    def resolve_for(self, ds):
-        """Return a copy with concrete split dates derived from ``ds``."""
+    def is_resolved(self):
+        """Return ``True`` once train and validation dates have been chosen."""
+        return bool(self.train_dates) and bool(self.val_dates)
+
+    def train_selection(self):
+        """Return a DatetimeIndex for selecting the training dates."""
         import pandas as pd
 
-        times = pd.to_datetime(ds.time.values)
-        start = times[0]
-        n_days = ds.sizes["time"]
-        short_run = n_days <= self.short_run_days
-        if short_run:
-            train_days = n_days // 2
-            val_days = n_days // 4
-        else:
-            train_days = self.train_years * 365
-            val_days = self.val_years * 365
-        train_end = start + pd.DateOffset(days=train_days)
-        val_end = train_end + pd.DateOffset(days=val_days)
-        return replace(
-            self,
-            train_start=str(start.date()),
-            train_end=str(train_end.date()),
-            val_end=str(val_end.date()),
-            short_run=short_run,
-        )
+        return pd.to_datetime(self.train_dates)
 
-    def train_slice(self):
-        return slice(self.train_start, self.train_end)
+    def val_selection(self):
+        """Return a DatetimeIndex for selecting the validation dates."""
+        import pandas as pd
 
-    def val_slice(self):
-        return slice(self.train_end, self.val_end)
+        return pd.to_datetime(self.val_dates)
 
     def training_period(self):
-        return f"{self.train_start} to {self.train_end}"
+        if not self.train_dates:
+            return None
+        dates = sorted(self.train_dates)
+        return f"{dates[0]} to {dates[-1]}"
 
     @classmethod
     def from_dict(cls, data):
@@ -253,7 +232,7 @@ class DataOptions:
     missing_flag: Optional[str] = None
     land_flag: Optional[str] = None
     features: list = field(default_factory=list)
-    log_target: bool = True
+    log_target: bool = False
     n_temporal_lags: int = 1
     input_names: list = field(default_factory=list)
     transforms: dict = field(default_factory=dict)
@@ -355,9 +334,10 @@ class Options:
 
         Populates ``options.data`` from the dataset and its loader
         ``metadata`` (variable names, identity, bounds, available period), then
-        derives the gridder, split, and fit sections from the dataset via
-        :meth:`set_config`. Returns ``self`` for chaining. Call after the
-        dataset is loaded and cropped.
+        derives the gridder and fit sections from the dataset via
+        :meth:`set_config`. The train/validation split is *not* set here; call
+        :func:`mindthegap.train_validation_dates` to choose it. Returns
+        ``self`` for chaining. Call after the dataset is loaded and cropped.
         """
         if metadata is not None:
             self.data.load_from(data, metadata)
@@ -367,18 +347,15 @@ class Options:
     def set_config(self, ds):
         """Resolve dataset-derived heuristics for the non-data sections.
 
-        Derives tile size and time chunk (``gridder``), the train/validation
-        split (``split``), and the batch size and training schedule (``fit``)
-        from the dataset so these heuristics live in the package rather than in
-        notebooks. Returns ``self`` for chaining.
+        Derives tile size and time chunk (``gridder``) and the batch size
+        (``fit``) from the dataset so these heuristics live in the package
+        rather than in notebooks. The train/validation split is left
+        unresolved until the user selects one via
+        :func:`mindthegap.train_validation_dates`. Returns ``self`` for
+        chaining.
         """
         self.gridder = self.gridder.resolve_for(ds)
-        self.split = self.split.resolve_for(ds)
-        self.fit = self.fit.resolve_for(
-            self.gridder.tile_size,
-            short_run=self.split.short_run,
-        )
-        self.data.training_period = self.split.training_period()
+        self.fit = self.fit.resolve_for(self.gridder.tile_size)
         return self
 
     def to_dict(self):

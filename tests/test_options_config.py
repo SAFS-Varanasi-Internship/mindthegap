@@ -6,6 +6,7 @@ from mindthegap import (
     Options,
     SplitOptions,
     demo_data,
+    train_validation_dates,
 )
 
 
@@ -26,40 +27,85 @@ def test_gridder_resolve_caps_and_aligns_tile():
     assert gridder.tile_size == (64, 64)
 
 
-def test_fit_resolve_scales_batch_and_short_run_schedule():
-    fit = FitOptions(epochs=50, patience=10).resolve_for(
-        (128, 128), short_run=False
-    )
+def test_fit_resolve_scales_batch_size():
+    fit = FitOptions(epochs=50, patience=10).resolve_for((128, 128))
     assert fit.batch_size == max(1, min(16, fit.pixel_budget // (128 * 128)))
     assert fit.epochs == 50
     assert fit.patience == 10
 
-    short = FitOptions().resolve_for((16, 16), short_run=True)
-    assert short.epochs == short.short_run_epochs
-    assert short.patience == short.short_run_patience
+
+def test_split_defaults_are_unresolved():
+    split = SplitOptions()
+
+    assert split.method is None
+    assert split.train_dates == []
+    assert split.val_dates == []
+    assert split.is_resolved() is False
+    assert split.training_period() is None
 
 
-def test_split_resolve_short_run_uses_fractional_split():
+def test_train_validation_dates_random_populates_split():
     ds, _ = demo_data(days=100, lat_size=8, lon_size=8, seed=2)
+    split = SplitOptions()
 
-    split = SplitOptions().resolve_for(ds)
+    result = train_validation_dates(ds.time, split, method="random", seed=7)
 
-    assert split.short_run is True
-    assert split.train_start == "2020-01-01"
-    assert split.train_slice() == slice("2020-01-01", split.train_end)
-    assert split.val_slice() == slice(split.train_end, split.val_end)
-    assert split.training_period() == f"{split.train_start} to {split.train_end}"
-
-
-def test_split_resolve_long_run_uses_year_windows():
-    ds, _ = demo_data(days=200, lat_size=8, lon_size=8, seed=2)
-
-    split = SplitOptions(train_years=1, val_years=1).resolve_for(ds)
-
-    assert split.short_run is False
+    assert result is split
+    assert split.method == "random"
+    assert split.is_resolved()
+    assert len(split.train_dates) == 50
+    assert len(split.val_dates) == 25
+    assert not (set(split.train_dates) & set(split.val_dates))
 
 
-def test_set_config_resolves_all_sections():
+def test_train_validation_dates_random_is_deterministic():
+    ds, _ = demo_data(days=60, lat_size=8, lon_size=8, seed=3)
+
+    a = train_validation_dates(ds.time, SplitOptions(), method="random", seed=5)
+    b = train_validation_dates(ds.time, SplitOptions(), method="random", seed=5)
+
+    assert a.train_dates == b.train_dates
+    assert a.val_dates == b.val_dates
+
+
+def test_train_validation_dates_manual_selects_windows():
+    ds, _ = demo_data(days=120, lat_size=8, lon_size=8, seed=2)
+    split = SplitOptions()
+
+    train_validation_dates(
+        ds.time,
+        split,
+        method="manual",
+        train_slice=slice("2020-01-01", "2020-02-01"),
+        val_slice=slice("2020-02-02", "2020-02-20"),
+    )
+
+    assert split.method == "manual"
+    assert split.train_dates[0] == "2020-01-01"
+    assert split.is_resolved()
+
+
+def test_train_validation_dates_manual_errors_on_empty_slice():
+    ds, _ = demo_data(days=60, lat_size=8, lon_size=8, seed=2)
+
+    with pytest.raises(ValueError, match="selects no dates"):
+        train_validation_dates(
+            ds.time,
+            SplitOptions(),
+            method="manual",
+            train_slice=slice("1990-01-01", "1990-02-01"),
+            val_slice=slice("2020-01-05", "2020-01-20"),
+        )
+
+
+def test_train_validation_dates_rejects_unknown_method():
+    ds, _ = demo_data(days=30, lat_size=8, lon_size=8, seed=2)
+
+    with pytest.raises(ValueError, match="Unknown method"):
+        train_validation_dates(ds.time, SplitOptions(), method="bogus")
+
+
+def test_set_config_resolves_gridder_and_fit_not_split():
     ds, _ = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default()
 
@@ -67,9 +113,7 @@ def test_set_config_resolves_all_sections():
 
     assert result is options
     assert options.gridder.tile_size == (16, 16)
-    assert options.split.short_run is True
-    assert options.fit.epochs == options.fit.short_run_epochs
-    assert options.data.training_period == options.split.training_period()
+    assert options.split.is_resolved() is False
 
 
 def test_set_data_config_populates_data_from_metadata():
@@ -85,9 +129,8 @@ def test_set_data_config_populates_data_from_metadata():
     assert options.data.missing_flag == "cloud_flag"
     assert options.data.land_flag == "land_flag"
     assert options.data.lat_bounds is not None
-    # non-data sections are resolved too
     assert options.gridder.tile_size == (16, 16)
-    assert options.split.short_run is True
+    assert options.split.is_resolved() is False
 
 
 def test_default_with_data_resolves_configuration():
@@ -99,6 +142,10 @@ def test_default_with_data_resolves_configuration():
     assert options.gridder.tile_size == (16, 16)
 
 
+def test_data_options_log_target_defaults_false():
+    assert Options.default().data.log_target is False
+
+
 def test_build_standardized_lazy_reads_config_from_options():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default()
@@ -108,11 +155,7 @@ def test_build_standardized_lazy_reads_config_from_options():
 
     from mindthegap import build_standardized_lazy
 
-    _, stats = build_standardized_lazy(
-        ds,
-        std_vars=options.data.features,
-        options=options.data,
-    )
+    _, stats = build_standardized_lazy(ds, options=options.data)
 
     assert options.data.is_resolved()
     assert options.data.transforms["temporal_lags"] == 2
@@ -121,8 +164,23 @@ def test_build_standardized_lazy_reads_config_from_options():
     assert options.data.target_std == float(stats["full_target"][1])
 
 
-def test_set_config_roundtrips_through_dict():
-    ds, _ = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
-    options = Options.default().set_config(ds)
+def test_build_standardized_lazy_defaults_output_chunks_from_gridder():
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(data=ds, metadata=metadata)
+
+    from mindthegap import build_standardized_lazy
+
+    output, _ = build_standardized_lazy(
+        ds, options=options.data, gridder=options.gridder
+    )
+
+    time_chunk = options.gridder.time_chunk
+    assert output.chunks["time"][0] == time_chunk
+
+
+def test_config_roundtrips_through_dict():
+    ds, metadata = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
+    options = Options.default(data=ds, metadata=metadata)
+    train_validation_dates(ds.time, options.split, method="random", seed=1)
 
     assert Options.from_dict(options.to_dict()) == options
