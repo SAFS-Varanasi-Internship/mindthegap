@@ -21,7 +21,7 @@ The whole object round-trips through plain Python data for JSON/YAML::
     options = mtg.Options.from_dict(config)
 """
 
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from typing import Any, Optional
 
 
@@ -62,6 +62,8 @@ class GridderOptions:
     overlap: Optional[tuple] = None
     time_chunk: int = 100
     preload_batch: bool = False
+    tile_upper_limit: int = 64
+    tile_multiple: int = 8
 
     def __post_init__(self):
         self.tile_size = _coerce_pair(self.tile_size, "tile_size")
@@ -73,6 +75,38 @@ class GridderOptions:
             )
         if self.time_chunk <= 0:
             raise ValueError("time_chunk must be a positive integer")
+
+    def _tile_length(self, size, chunk):
+        """Largest tile length that fits the data, chunk, and cap."""
+        available = min(size, chunk, self.tile_upper_limit)
+        aligned = available - available % self.tile_multiple
+        if aligned < self.tile_multiple:
+            raise ValueError(
+                f"dimension must contain at least {self.tile_multiple} cells"
+            )
+        return aligned
+
+    def resolve_for(self, ds):
+        """Return a copy with tile_size and time_chunk derived from ``ds``.
+
+        Tile lengths are inferred from the dataset sizes and on-disk chunks,
+        capped by ``tile_upper_limit`` and aligned to ``tile_multiple``. The
+        time chunk targets roughly six blocks across the record.
+        """
+        chunk_sizes = getattr(ds, "chunksizes", {})
+
+        def chunk0(dim):
+            values = chunk_sizes.get(dim, (ds.sizes[dim],))
+            return values[0] if values else ds.sizes[dim]
+
+        tile_lat = self._tile_length(ds.sizes["lat"], chunk0("lat"))
+        tile_lon = self._tile_length(ds.sizes["lon"], chunk0("lon"))
+        time_chunk = min(100, max(1, ds.sizes["time"] // 6))
+        return replace(
+            self,
+            tile_size=(tile_lat, tile_lon),
+            time_chunk=time_chunk,
+        )
 
     def patch_dims(self):
         """Return the xbatcher ``input_dims`` mapping for this configuration."""
@@ -104,6 +138,9 @@ class FitOptions:
     loss: str = "mse"
     optimizer: str = "adam"
     shuffle_buffer: int = 512
+    pixel_budget: int = 40 * 56 * 16
+    short_run_epochs: int = 2
+    short_run_patience: int = 2
 
     def __post_init__(self):
         if self.epochs <= 0:
@@ -114,6 +151,78 @@ class FitOptions:
             raise ValueError("learning_rate must be positive")
         if self.patience < 0:
             raise ValueError("patience must be non-negative")
+
+    def resolve_for(self, tile_size, *, short_run):
+        """Return a copy with batch size and schedule derived from context.
+
+        ``batch_size`` is capped so ``batch_size * tile_pixels`` stays within
+        ``pixel_budget``. Short records use the reduced epoch/patience schedule.
+        """
+        pixels_per_tile = max(1, tile_size[0] * tile_size[1])
+        batch_size = max(1, min(16, self.pixel_budget // pixels_per_tile))
+        epochs = self.short_run_epochs if short_run else self.epochs
+        patience = self.short_run_patience if short_run else self.patience
+        return replace(
+            self,
+            batch_size=batch_size,
+            epochs=epochs,
+            patience=patience,
+        )
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**{f.name: data[f.name] for f in fields(cls) if f.name in data})
+
+
+@dataclass
+class SplitOptions:
+    """Train/validation/test temporal split, resolved from the dataset.
+
+    ``short_run_days`` selects between a 50/25/25 split for short records and a
+    fixed train/validation window (in years) for longer ones. Resolved values
+    are stored as ISO date strings so they serialize cleanly.
+    """
+
+    train_start: Optional[str] = None
+    train_end: Optional[str] = None
+    val_end: Optional[str] = None
+    short_run: Optional[bool] = None
+    short_run_days: int = 120
+    train_years: int = 3
+    val_years: int = 1
+
+    def resolve_for(self, ds):
+        """Return a copy with concrete split dates derived from ``ds``."""
+        import pandas as pd
+
+        times = pd.to_datetime(ds.time.values)
+        start = times[0]
+        n_days = ds.sizes["time"]
+        short_run = n_days <= self.short_run_days
+        if short_run:
+            train_days = n_days // 2
+            val_days = n_days // 4
+        else:
+            train_days = self.train_years * 365
+            val_days = self.val_years * 365
+        train_end = start + pd.DateOffset(days=train_days)
+        val_end = train_end + pd.DateOffset(days=val_days)
+        return replace(
+            self,
+            train_start=str(start.date()),
+            train_end=str(train_end.date()),
+            val_end=str(val_end.date()),
+            short_run=short_run,
+        )
+
+    def train_slice(self):
+        return slice(self.train_start, self.train_end)
+
+    def val_slice(self):
+        return slice(self.train_end, self.val_end)
+
+    def training_period(self):
+        return f"{self.train_start} to {self.train_end}"
 
     @classmethod
     def from_dict(cls, data):
@@ -174,6 +283,7 @@ class Options:
 
     gridder: GridderOptions = field(default_factory=GridderOptions)
     fit: FitOptions = field(default_factory=FitOptions)
+    split: SplitOptions = field(default_factory=SplitOptions)
     data: DataOptions = field(default_factory=DataOptions)
 
     @classmethod
@@ -183,6 +293,24 @@ class Options:
         ``data`` starts unresolved and is populated by the pipeline.
         """
         return cls()
+
+    def set_config(self, ds):
+        """Resolve dataset-dependent configuration from ``ds`` in place.
+
+        Derives tile size and time chunk (``gridder``), the train/validation
+        split (``split``), and the batch size and training schedule (``fit``)
+        from the dataset so these heuristics live in the package rather than in
+        notebooks. Returns ``self`` for chaining. Call after the dataset is
+        loaded, cropped, and any smoke-test subsetting is applied.
+        """
+        self.gridder = self.gridder.resolve_for(ds)
+        self.split = self.split.resolve_for(ds)
+        self.fit = self.fit.resolve_for(
+            self.gridder.tile_size,
+            short_run=self.split.short_run,
+        )
+        self.data.training_period = self.split.training_period()
+        return self
 
     def to_dict(self):
         """Serialize the whole configuration to plain JSON/YAML-safe data."""
@@ -195,6 +323,7 @@ class Options:
         return cls(
             gridder=GridderOptions.from_dict(data.get("gridder", {})),
             fit=FitOptions.from_dict(data.get("fit", {})),
+            split=SplitOptions.from_dict(data.get("split", {})),
             data=DataOptions.from_dict(data.get("data", {})),
         )
 
