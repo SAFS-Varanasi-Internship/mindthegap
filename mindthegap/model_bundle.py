@@ -1,5 +1,6 @@
 """Portable Keras model bundles for local and hosted inference."""
 
+from copy import deepcopy
 from pathlib import Path
 import subprocess
 
@@ -144,9 +145,10 @@ def create_model_bundle_metadata(
     path,
     *,
     model_name,
-    dataset_name,
-    product_id,
-    region,
+    dataset_metadata=None,
+    dataset_name=None,
+    product_id=None,
+    region=None,
     training_period,
     input_names,
     target_name,
@@ -168,6 +170,31 @@ def create_model_bundle_metadata(
         )
     bundle_path.mkdir(parents=True, exist_ok=True)
 
+    dataset_section = _native(deepcopy(dataset_metadata or {}))
+    supplied_dataset_values = {
+        "name": dataset_name,
+        "product_id": product_id,
+        "region": region,
+        "training_period": training_period,
+    }
+    dataset_section.update(
+        {
+            key: value
+            for key, value in supplied_dataset_values.items()
+            if value is not None
+        }
+    )
+    missing_dataset_values = [
+        key
+        for key in ("name", "product_id", "region", "training_period")
+        if key not in dataset_section
+    ]
+    if missing_dataset_values:
+        raise ValueError(
+            "dataset metadata is missing: "
+            + ", ".join(missing_dataset_values)
+        )
+
     metadata = {
         "bundle_version": "1.0",
         "model": {
@@ -175,12 +202,7 @@ def create_model_bundle_metadata(
             "version": model_version,
             "framework": "keras",
         },
-        "dataset": {
-            "name": dataset_name,
-            "product_id": product_id,
-            "region": region,
-            "training_period": training_period,
-        },
+        "dataset": dataset_section,
         "inputs": [
             {"name": name, "channel": channel}
             for channel, name in enumerate(input_names)

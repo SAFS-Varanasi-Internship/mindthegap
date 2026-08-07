@@ -115,6 +115,39 @@ def test_metadata_overwrite_is_explicit(tmp_path):
     _create_metadata(bundle_path, overwrite=True)
 
 
+def test_metadata_preserves_dataset_loader_details(tmp_path):
+    bundle_path = tmp_path / "bundle"
+    create_model_bundle_metadata(
+        bundle_path,
+        model_name="test-gap-model",
+        dataset_metadata={
+            "name": "Synthetic",
+            "product_id": "mindthegap-synthetic",
+            "region": {"lat": [5.0, 31.0], "lon": [42.0, 80.0]},
+            "available_period": "2020-01-01 to 2020-04-29",
+        },
+        training_period="2020-01-01 to 2020-02-29",
+        input_names=["channel_a"],
+        target_name="chlor_a",
+        target_units="mg m-3",
+        expected_input_shape=[None, 1],
+        transforms=[],
+        standardization={},
+        missing_value_handling="Replace NaN inputs with zero.",
+    )
+
+    metadata = yaml.safe_load(
+        (bundle_path / "model_metadata.yaml").read_text()
+    )
+    assert (
+        metadata["dataset"]["available_period"]
+        == "2020-01-01 to 2020-04-29"
+    )
+    assert metadata["dataset"]["training_period"] == (
+        "2020-01-01 to 2020-02-29"
+    )
+
+
 def test_bundle_overwrite_is_explicit(tmp_path):
     bundle_path = tmp_path / "bundle"
     _create_metadata(bundle_path)

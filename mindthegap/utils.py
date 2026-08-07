@@ -1,11 +1,24 @@
 from typing import Union
+from numbers import Real
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 
+DEMO_REGIONS = {
+    "indian ocean": (-40.0, 30.0, 20.0, 120.0),
+    "arabian sea": (3.0, 33.0, 40.0, 82.0),
+    "ne atlantic": (0.0, 70.0, -45.0, 20.0),
+    "nw pacific": (0.0, 65.0, 100.0, 180.0),
+}
+
+
 def demo_data(
+    dataset="synthetic",
+    region=None,
+    time_slice=None,
+    *,
     days=120,
     lat_size=16,
     lon_size=16,
@@ -13,7 +26,240 @@ def demo_data(
     seed=42,
     cloud_fraction=0.12,
 ):
-    """Create a deterministic chlorophyll dataset for examples and tests."""
+    """Load a chlorophyll dataset and return ``(dataset, metadata)``.
+
+    ``dataset`` may be ``"pace"``, ``"globcolour"``,
+    ``"indian-ocean"``, or ``"synthetic"``. ``region`` may be a supported
+    name or ``[lat_min, lat_max, lon_min, lon_max]``. ``None`` selects the
+    full spatial extent.
+    """
+    loaders = {
+        "pace": _load_pace,
+        "globcolour": _load_globcolour,
+        "indian-ocean": _load_indian_ocean,
+        "synthetic": _load_synthetic,
+    }
+    if dataset not in loaders:
+        choices = ", ".join(loaders)
+        raise ValueError(f"Unknown dataset {dataset!r}; choose from: {choices}")
+
+    if dataset == "synthetic":
+        ds = loaders[dataset](
+            days=days,
+            lat_size=lat_size,
+            lon_size=lon_size,
+            start=start,
+            seed=seed,
+            cloud_fraction=cloud_fraction,
+        )
+    else:
+        ds = loaders[dataset]()
+
+    region_bounds, region_name = _resolve_region(region)
+    ds = _select_demo_subset(
+        ds,
+        region_bounds=region_bounds,
+        time_slice=time_slice,
+    )
+    ds = _prepare_demo_dataset(dataset, ds)
+    config = _dataset_config(dataset)
+    metadata = {
+        "dataset": {
+            "name": config["name"],
+            "product_id": config["product_id"],
+            "loader": dataset,
+            "region": {
+                "lat": [
+                    float(ds["lat"].min()),
+                    float(ds["lat"].max()),
+                ],
+                "lon": [
+                    float(ds["lon"].min()),
+                    float(ds["lon"].max()),
+                ],
+            },
+            "available_period": (
+                f"{pd.to_datetime(ds.time.values[0]).date()} to "
+                f"{pd.to_datetime(ds.time.values[-1]).date()}"
+            ),
+        },
+        "target": {
+            "name": config["target"],
+            "units": ds[config["target"]].attrs.get("units", "unknown"),
+        },
+        "variables": {
+            "target": config["target"],
+            "features": [],
+            "missing_flag": config["missing_flag"],
+            "land_flag": config["land_flag"],
+        },
+    }
+    if region_name is not None:
+        metadata["dataset"]["region_name"] = region_name
+    return ds, metadata
+
+
+def _dataset_config(dataset):
+    return {
+        "pace": {
+            "name": "PACE",
+            "product_id": "PACE_OCI_L3M_CHL",
+            "target": "chlor_a",
+            "missing_flag": "cloud_flag",
+            "land_flag": "land_flag",
+        },
+        "globcolour": {
+            "name": "GlobColour",
+            "product_id": (
+                "cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D"
+            ),
+            "target": "CHL",
+            "missing_flag": "cloud_flag",
+            "land_flag": "land_flag",
+        },
+        "indian-ocean": {
+            "name": "Indian Ocean",
+            "product_id": "mind_the_chl_gap/IO_rechunked.zarr",
+            "target": "CHL_cmes-level3",
+            "missing_flag": "CHL_cmes-cloud",
+            "land_flag": "CHL_cmes-land",
+        },
+        "synthetic": {
+            "name": "Synthetic",
+            "product_id": "mindthegap-synthetic",
+            "target": "chlor_a",
+            "missing_flag": "cloud_flag",
+            "land_flag": "land_flag",
+        },
+    }[dataset]
+
+
+def _validate_region_bounds(bounds):
+    if len(bounds) != 4:
+        raise ValueError(
+            "region bounds must contain "
+            "[lat_min, lat_max, lon_min, lon_max]"
+        )
+    if any(isinstance(value, bool) or not isinstance(value, Real) for value in bounds):
+        raise TypeError("region bounds must be four numeric values")
+
+    lat_min, lat_max, lon_min, lon_max = map(float, bounds)
+    if not all(np.isfinite(value) for value in bounds):
+        raise ValueError("region bounds must be finite")
+    if not -90 <= lat_min < lat_max <= 90:
+        raise ValueError(
+            "latitude bounds must satisfy -90 <= lat_min < lat_max <= 90"
+        )
+    if not -180 <= lon_min < lon_max <= 180:
+        raise ValueError(
+            "longitude bounds must satisfy -180 <= lon_min < lon_max <= 180"
+        )
+    return lat_min, lat_max, lon_min, lon_max
+
+
+def _resolve_region(region):
+    if region is None:
+        return None, None
+    if isinstance(region, str):
+        region_name = " ".join(
+            region.lower().replace("_", " ").replace("-", " ").split()
+        )
+        if region_name not in DEMO_REGIONS:
+            choices = ", ".join(sorted(DEMO_REGIONS))
+            raise ValueError(
+                f"Unknown region {region!r}; choose from: {choices}"
+            )
+        return _validate_region_bounds(DEMO_REGIONS[region_name]), region_name
+    if not isinstance(region, (list, tuple, np.ndarray)):
+        raise TypeError(
+            "region must be a name or "
+            "[lat_min, lat_max, lon_min, lon_max]"
+        )
+    return _validate_region_bounds(region), None
+
+
+def _coordinate_slice(ds, dim, lower, upper):
+    if lower is None and upper is None:
+        return None
+    index = ds.indexes[dim]
+    if lower is None:
+        lower = index.min()
+    if upper is None:
+        upper = index.max()
+    if lower >= upper:
+        raise ValueError(f"{dim}_min must be less than {dim}_max")
+
+    if index.is_monotonic_increasing:
+        return slice(lower, upper)
+    if index.is_monotonic_decreasing:
+        return slice(upper, lower)
+    raise ValueError(f"{dim} coordinates must be monotonic")
+
+
+def _select_demo_subset(
+    ds,
+    *,
+    region_bounds,
+    time_slice,
+):
+    selectors = {}
+    if region_bounds is not None:
+        lat_min, lat_max, lon_min, lon_max = region_bounds
+        selectors["lat"] = _coordinate_slice(
+            ds,
+            "lat",
+            lat_min,
+            lat_max,
+        )
+        selectors["lon"] = _coordinate_slice(
+            ds,
+            "lon",
+            lon_min,
+            lon_max,
+        )
+    if time_slice is not None:
+        selectors["time"] = time_slice
+    if selectors:
+        ds = ds.sel(selectors)
+    if any(ds.sizes[dim] == 0 for dim in ("time", "lat", "lon")):
+        raise ValueError("The requested dataset slices contain no data")
+    return ds
+
+
+def _prepare_demo_dataset(dataset, ds):
+    if dataset == "pace":
+        gap = ds["chlor_a"].isnull()
+        land = gap.all(dim="time")
+        return ds.assign(
+            land_flag=land.astype("int8"),
+            cloud_flag=(gap & ~land).astype("int8"),
+        )
+    if dataset == "globcolour":
+        land = ds["flags"] == 1
+        return ds.assign(
+            land_flag=land.astype("int8"),
+            cloud_flag=(ds["CHL"].isnull() & ~land).astype("int8"),
+        ).drop_vars("flags")
+    if dataset == "indian-ocean":
+        land = ds["CHL_cmes-cloud"].isel(time=0, drop=True) == 2
+        return ds.assign(
+            **{
+                "CHL_cmes-land": land.astype("int8").broadcast_like(
+                    ds["CHL_cmes-level3"]
+                )
+            }
+        )
+    return ds
+
+
+def _load_synthetic(
+    days,
+    lat_size,
+    lon_size,
+    start,
+    seed,
+    cloud_fraction,
+):
     if days <= 0 or lat_size <= 0 or lon_size <= 0:
         raise ValueError("days, lat_size, and lon_size must be positive")
     if not 0 <= cloud_fraction <= 1:
@@ -40,7 +286,7 @@ def demo_data(
     cloud = rng.random(chlorophyll.shape) < cloud_fraction
     chlorophyll[land | cloud] = np.nan
 
-    return xr.Dataset(
+    ds = xr.Dataset(
         data_vars={
             "chlor_a": (("time", "lat", "lon"), chlorophyll),
             "cloud_flag": (
@@ -54,6 +300,81 @@ def demo_data(
         },
         coords={"time": time, "lat": lat, "lon": lon},
     )
+    ds["chlor_a"].attrs["units"] = "mg m-3"
+    return ds
+
+
+def _load_pace():
+    try:
+        import earthaccess
+        import icechunk as ic
+    except ImportError as error:
+        raise ImportError(
+            "PACE requires earthaccess>=0.15 and icechunk>=2"
+        ) from error
+
+    auth = earthaccess.login()
+    creds = auth.get_s3_credentials(daac="OBDAAC")
+    storage = ic.http_storage(
+        "https://data.source.coop/fish-pace/pace-oci/inregion/"
+        "PACE_OCI_L3M_CHL"
+    )
+    credentials = ic.credentials.containers_credentials(
+        {
+            "s3://ob-cumulus-prod-public/": ic.credentials.s3_credentials(
+                access_key_id=creds["accessKeyId"],
+                secret_access_key=creds["secretAccessKey"],
+                session_token=creds["sessionToken"],
+            )
+        }
+    )
+    store = ic.Repository.open(
+        storage,
+        authorize_virtual_chunk_access=credentials,
+    ).readonly_session("main").store
+    ds = xr.open_zarr(
+        store,
+        consolidated=False,
+        group="daily/0p1deg/chunks_512",
+        chunks={},
+    )
+    return ds
+
+
+def _load_globcolour():
+    try:
+        import icechunk as ic
+    except ImportError as error:
+        raise ImportError("GlobColour requires icechunk>=2") from error
+
+    storage = ic.http_storage(
+        "https://data.source.coop/fish-pace/globcolour/"
+        "cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D"
+    )
+    repository = ic.Repository.open(storage)
+    credentials = {
+        prefix: ic.credentials.HttpAccess
+        for prefix in repository.config.virtual_chunk_containers or []
+    }
+    store = repository.reopen(
+        authorize_virtual_chunk_access=credentials
+    ).readonly_session("main").store
+    return xr.open_zarr(
+        store,
+        consolidated=False,
+        chunks={},
+    )[["CHL", "flags"]]
+
+
+def _load_indian_ocean():
+    ds = xr.open_dataset(
+        "gcs://nmfs_odp_nwfsc/CB/mind_the_chl_gap/"
+        "IO_rechunked.zarr",
+        engine="zarr",
+        backend_kwargs={"storage_options": {"token": "anon"}},
+        consolidated=True,
+    )
+    return ds
 
 
 def crop_to_multiple(
