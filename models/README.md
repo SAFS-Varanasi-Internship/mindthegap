@@ -41,76 +41,82 @@ command-line program.
 
 ## Save a model bundle
 
-After training, prepare metadata that completely describes inference. Input
-channels must be listed in the exact order used to construct the model input.
+Creating a bundle is intentionally a two-step process. First, create and
+review the metadata. Only after confirming that it is correct should you save
+the trained model.
+
+Input names must be listed in the exact order used to construct the model
+input.
 
 ```python
 import mindthegap as mtg
 
-metadata = {
-    "model": {
-        "name": "Arabian Sea chlorophyll U-Net",
-        "version": "1.0",
-        "framework": "keras",
+bundle_path = "models/arabian-sea-chlorophyll-unet"
+
+metadata_path = mtg.create_model_bundle_metadata(
+    bundle_path,
+    model_name="Arabian Sea chlorophyll U-Net",
+    dataset_name="Copernicus GlobColour",
+    product_id="cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D",
+    region={
+        "lat": [5.0, 31.0],
+        "lon": [42.0, 80.0],
     },
-    "dataset": {
-        "name": "Copernicus GlobColour",
-        "product_id": "cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D",
-        "region": {
-            "lat": [5.0, 31.0],
-            "lon": [42.0, 80.0],
-        },
-        "training_period": "2018-01-01 to 2020-12-31",
-    },
-    "inputs": [
-        {"name": "masked_target", "channel": 0},
-        {"name": "masked_target_m1", "channel": 1},
-        {"name": "masked_target_p1", "channel": 2},
-        {"name": "day_sin", "channel": 3},
-        {"name": "day_cos", "channel": 4},
-        {"name": "synthetic_missing_flag", "channel": 5},
-        {"name": "true_missing_flag", "channel": 6},
-        {"name": "valid_masked_target_flag", "channel": 7},
-        {"name": "land_flag", "channel": 8},
+    training_period="2018-01-01 to 2020-12-31",
+    input_names=[
+        "masked_target",
+        "masked_target_m1",
+        "masked_target_p1",
+        "day_sin",
+        "day_cos",
+        "synthetic_missing_flag",
+        "true_missing_flag",
+        "valid_masked_target_flag",
+        "land_flag",
     ],
-    "target": {
-        "name": "CHL",
-        "units": "mg m-3",
+    target_name="CHL",
+    target_units="mg m-3",
+    expected_input_shape=[None, None, None, 9],
+    transforms={
+        "target": "natural logarithm",
+        "temporal_lags": 1,
     },
-    "preprocessing": {
-        "expected_input_shape": [None, None, None, 9],
-        "transforms": {
-            "target": "natural logarithm",
-            "temporal_lags": 1,
+    standardization={
+        "full_target": {
+            "mean": 0.52,
+            "std": 0.19,
+            "applied": True,
         },
-        "standardization": {
-            "full_target": {
-                "mean": 0.52,
-                "std": 0.19,
-                "applied": True,
-            },
-        },
-        "missing_value_handling": (
-            "Replace missing predictor values with zero after standardization; "
-            "use the mask channels to identify land and missing observations."
-        ),
     },
-    "limitations": (
+    missing_value_handling=(
+        "Replace missing predictor values with zero after standardization; "
+        "use the mask channels to identify land and missing observations."
+    ),
+    limitations=(
         "Use only with the documented product, region, channel order, and "
         "preprocessing."
     ),
-}
+)
+print(metadata_path)
+```
 
-bundle_path = mtg.save_model_bundle(
+Open `models/arabian-sea-chlorophyll-unet/model_metadata.yaml` and check every
+field, especially the dataset, region, dates, input order, transforms, and
+standardization values. Correct the code that creates the metadata and run it
+again if anything is wrong. Do not proceed until this file is accurate.
+
+After reviewing the metadata, save the model and generate its model card:
+
+```python
+mtg.save_model_bundle(
     model,
-    "models/arabian-sea-chlorophyll-unet",
-    metadata,
+    bundle_path,
 )
 print(bundle_path)
 ```
 
-The helper records the current Git commit in `model_metadata.yaml`; it does
-not create a Git commit or upload anything.
+`create_model_bundle_metadata()` records the current Git commit in
+`model_metadata.yaml`; it does not create a Git commit or upload anything.
 
 Confirm the local bundle loads before publishing it:
 

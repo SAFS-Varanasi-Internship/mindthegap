@@ -1,6 +1,5 @@
 """Portable Keras model bundles for local and hosted inference."""
 
-from copy import deepcopy
 from pathlib import Path
 import subprocess
 
@@ -141,31 +140,99 @@ Git commit: `{metadata['source']['git_commit']}`
 """
 
 
-def save_model_bundle(model, path, metadata, overwrite=False):
-    """Save a Keras model, inference metadata, and model card."""
+def create_model_bundle_metadata(
+    path,
+    *,
+    model_name,
+    dataset_name,
+    product_id,
+    region,
+    training_period,
+    input_names,
+    target_name,
+    target_units,
+    expected_input_shape,
+    transforms,
+    standardization,
+    missing_value_handling,
+    model_version="1.0",
+    limitations=None,
+    overwrite=False,
+):
+    """Create and save reviewable inference metadata for a model bundle."""
     bundle_path = Path(path)
-    if bundle_path.exists() and not overwrite:
+    metadata_path = bundle_path / METADATA_FILENAME
+    if metadata_path.exists() and not overwrite:
         raise FileExistsError(
-            f"Bundle already exists at {bundle_path}; use overwrite=True"
+            f"Metadata already exists at {metadata_path}; use overwrite=True"
+        )
+    bundle_path.mkdir(parents=True, exist_ok=True)
+
+    metadata = {
+        "bundle_version": "1.0",
+        "model": {
+            "name": model_name,
+            "version": model_version,
+            "framework": "keras",
+        },
+        "dataset": {
+            "name": dataset_name,
+            "product_id": product_id,
+            "region": region,
+            "training_period": training_period,
+        },
+        "inputs": [
+            {"name": name, "channel": channel}
+            for channel, name in enumerate(input_names)
+        ],
+        "target": {
+            "name": target_name,
+            "units": target_units,
+        },
+        "preprocessing": {
+            "expected_input_shape": expected_input_shape,
+            "transforms": transforms,
+            "standardization": standardization,
+            "missing_value_handling": missing_value_handling,
+        },
+        "limitations": limitations
+        or (
+            "Use only with the documented product, region, channel order, "
+            "and preprocessing."
+        ),
+        "source": _source_metadata(),
+    }
+    prepared = _native(metadata)
+    _validate_metadata(prepared)
+    with metadata_path.open("w", encoding="utf-8") as file:
+        yaml.safe_dump(prepared, file, sort_keys=False)
+    return metadata_path
+
+
+def save_model_bundle(model, path, overwrite=False):
+    """Save a Keras model and model card beside reviewed bundle metadata."""
+    bundle_path = Path(path)
+    metadata_path = bundle_path / METADATA_FILENAME
+    if not metadata_path.is_file():
+        raise FileNotFoundError(
+            f"Create and review {metadata_path} before saving the model"
+        )
+    model_path = bundle_path / MODEL_FILENAME
+    readme_path = bundle_path / README_FILENAME
+    existing = [file.name for file in (model_path, readme_path) if file.exists()]
+    if existing and not overwrite:
+        raise FileExistsError(
+            f"Bundle files already exist at {bundle_path}: "
+            + ", ".join(existing)
+            + "; use overwrite=True"
         )
 
-    prepared = _native(deepcopy(metadata))
-    prepared.setdefault("bundle_version", "1.0")
-    prepared.setdefault("model", {})
-    prepared["model"].setdefault("name", getattr(model, "name", "model"))
-    prepared["model"].setdefault("version", "1.0")
-    prepared["model"].setdefault("framework", "keras")
-    prepared.setdefault("source", {})
-    for key, value in _source_metadata().items():
-        prepared["source"].setdefault(key, value)
-    _validate_metadata(prepared)
-
-    bundle_path.mkdir(parents=True, exist_ok=True)
+    with metadata_path.open(encoding="utf-8") as file:
+        metadata = yaml.safe_load(file)
+    _validate_metadata(metadata)
     model.save(bundle_path / MODEL_FILENAME)
-    with (bundle_path / METADATA_FILENAME).open("w", encoding="utf-8") as file:
-        yaml.safe_dump(prepared, file, sort_keys=False)
-    (bundle_path / README_FILENAME).write_text(
-        _model_card(prepared),
+    readme_path.write_text(
+        _model_card(metadata),
         encoding="utf-8",
     )
     return bundle_path
@@ -192,6 +259,10 @@ def load_model_bundle(path, compile=False):
         bundle_path / MODEL_FILENAME,
         compile=compile,
     )
+    # Keras defaults uncompiled GPU models to XLA JIT, which is not reliable
+    # with this U-Net/cuDNN combination.
+    if not compile:
+        model.jit_compile = False
     with (bundle_path / METADATA_FILENAME).open(
         encoding="utf-8"
     ) as file:

@@ -5,7 +5,11 @@ import numpy as np
 import pytest
 import yaml
 
-from mindthegap import load_model_bundle, save_model_bundle
+from mindthegap import (
+    create_model_bundle_metadata,
+    load_model_bundle,
+    save_model_bundle,
+)
 
 
 def _model():
@@ -42,17 +46,42 @@ def _metadata():
     }
 
 
+def _create_metadata(bundle_path, metadata=None, overwrite=False):
+    metadata = metadata or _metadata()
+    return create_model_bundle_metadata(
+        bundle_path,
+        model_name="test-gap-model",
+        dataset_name=metadata["dataset"]["name"],
+        product_id=metadata["dataset"]["product_id"],
+        region=metadata["dataset"]["region"],
+        training_period=metadata["dataset"]["training_period"],
+        input_names=[item["name"] for item in metadata["inputs"]],
+        target_name=metadata["target"]["name"],
+        target_units=metadata["target"]["units"],
+        expected_input_shape=metadata["preprocessing"]["expected_input_shape"],
+        transforms=metadata["preprocessing"]["transforms"],
+        standardization=metadata["preprocessing"]["standardization"],
+        missing_value_handling=metadata["preprocessing"][
+            "missing_value_handling"
+        ],
+        overwrite=overwrite,
+    )
+
+
 def test_model_bundle_round_trip(tmp_path):
     model = _model()
     sample = np.arange(12, dtype=np.float32).reshape(3, 4)
     expected = model.predict(sample, verbose=0)
     bundle_path = tmp_path / "bundle"
 
-    result = save_model_bundle(model, bundle_path, _metadata())
+    metadata_path = _create_metadata(bundle_path)
+    result = save_model_bundle(model, bundle_path)
     loaded_model, metadata = load_model_bundle(bundle_path)
     actual = loaded_model.predict(sample, verbose=0)
 
     assert result == bundle_path
+    assert loaded_model.jit_compile is False
+    assert metadata_path == bundle_path / "model_metadata.yaml"
     assert {file.name for file in bundle_path.iterdir()} == {
         "model.keras",
         "model_metadata.yaml",
@@ -71,27 +100,30 @@ def test_model_bundle_round_trip(tmp_path):
     ) == metadata
 
 
-def test_bundle_requires_inference_metadata(tmp_path):
-    with pytest.raises(ValueError, match="missing required section"):
-        save_model_bundle(_model(), tmp_path / "bundle", {"dataset": {}})
+def test_bundle_requires_metadata_file(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Create and review"):
+        save_model_bundle(_model(), tmp_path / "bundle")
 
 
-def test_bundle_rejects_unordered_channels(tmp_path):
-    metadata = _metadata()
-    metadata["inputs"][1]["channel"] = 3
+def test_metadata_overwrite_is_explicit(tmp_path):
+    bundle_path = tmp_path / "bundle"
+    _create_metadata(bundle_path)
 
-    with pytest.raises(ValueError, match="ordered from zero"):
-        save_model_bundle(_model(), tmp_path / "bundle", metadata)
+    with pytest.raises(FileExistsError, match="Metadata already exists"):
+        _create_metadata(bundle_path)
+
+    _create_metadata(bundle_path, overwrite=True)
 
 
 def test_bundle_overwrite_is_explicit(tmp_path):
     bundle_path = tmp_path / "bundle"
-    save_model_bundle(_model(), bundle_path, _metadata())
+    _create_metadata(bundle_path)
+    save_model_bundle(_model(), bundle_path)
 
     with pytest.raises(FileExistsError):
-        save_model_bundle(_model(), bundle_path, _metadata())
+        save_model_bundle(_model(), bundle_path)
 
-    save_model_bundle(_model(), bundle_path, _metadata(), overwrite=True)
+    save_model_bundle(_model(), bundle_path, overwrite=True)
 
 
 def test_load_rejects_incomplete_bundle(tmp_path):
