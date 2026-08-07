@@ -41,6 +41,24 @@ def test_demo_data_smoke_test_caps_synthetic_size():
     assert ds.sizes == {"time": 30, "lat": 32, "lon": 32}
 
 
+def test_demo_data_smoke_test_applies_after_region_selection():
+    ds, _ = demo_data(
+        region=[10, 25, 50, 70],
+        days=60,
+        lat_size=64,
+        lon_size=64,
+        smoke_test=True,
+        smoke_days=20,
+        smoke_size=8,
+    )
+
+    assert ds.sizes["time"] == 20
+    assert ds.sizes["lat"] <= 8
+    assert ds.sizes["lon"] <= 8
+    assert ds.sizes["lat"] > 0 and ds.sizes["lon"] > 0
+
+
+
 def test_demo_data_applies_region_and_time_slice():
     ds, metadata = demo_data(
         region=[10, 25, 50, 70],

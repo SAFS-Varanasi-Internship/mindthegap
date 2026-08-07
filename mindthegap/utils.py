@@ -68,12 +68,6 @@ def demo_data(
         )
     else:
         ds = loaders[dataset]()
-        if smoke_test:
-            ds = ds.isel(
-                time=slice(0, min(smoke_days, ds.sizes["time"])),
-                lat=slice(0, min(smoke_size, ds.sizes["lat"])),
-                lon=slice(0, min(smoke_size, ds.sizes["lon"])),
-            )
 
     region_bounds, region_name = _resolve_region(region)
     ds = _select_demo_subset(
@@ -81,6 +75,12 @@ def demo_data(
         region_bounds=region_bounds,
         time_slice=time_slice,
     )
+    if smoke_test:
+        ds = ds.isel(
+            time=slice(0, min(smoke_days, ds.sizes["time"])),
+            lat=slice(0, min(smoke_size, ds.sizes["lat"])),
+            lon=slice(0, min(smoke_size, ds.sizes["lon"])),
+        )
     ds = _prepare_demo_dataset(dataset, ds)
     config = _dataset_config(dataset)
     metadata = {
