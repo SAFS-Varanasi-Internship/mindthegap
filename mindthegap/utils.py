@@ -547,7 +547,7 @@ def build_standardized_lazy(
         if not full.split.is_resolved():
             raise ValueError(
                 "options.split has no dates; call "
-                "mtg.train_validation_dates(ds.time, options.split) before "
+                "mtg.train_validation_dates(ds.time, options) before "
                 "building the standardized dataset"
             )
         split_selection = full.split.train_selection()
@@ -909,38 +909,44 @@ def train_validation_dates(
     """Choose training and validation dates and record them on ``options``.
 
     ``times`` is the dataset time coordinate (e.g. ``ds.time``). ``options`` is
-    the :class:`SplitOptions` section (``options.split``); its ``train_dates``
-    and ``val_dates`` are populated with the selected ISO date strings and its
-    ``method`` is recorded. Returns ``options``.
+    the full :class:`Options` object; the split configuration is read from and
+    the chosen ``train_dates`` / ``val_dates`` are recorded on
+    ``options.split``. The seed defaults to ``options.resolved_split_seed()``
+    (the split's own seed, or the global seed when it is ``None``) and
+    ``verbose`` defaults to ``options.verbose``. Returns ``options``.
 
-    ``method`` defaults to ``options.method``. ``method="random"`` samples
+    ``method`` defaults to ``options.split.method``. ``method="random"`` samples
     spaced-out dates for train/validation using ``min_day_difference`` (defaults
-    to ``options.min_day_difference``); the counts come from ``n_train`` /
+    to ``options.split.min_day_difference``); the counts come from ``n_train`` /
     ``n_val`` or from ``train_fraction`` / ``val_fraction`` (defaulting to
-    ``options.train_fraction`` / ``options.val_fraction``, i.e. 80/20 of the
+    ``options.split.train_fraction`` / ``val_fraction``, i.e. 80/20 of the
     record). ``method="manual"`` selects dates falling in ``train_slice`` and
     ``val_slice`` (``slice("1997-01-01", "2000-01-01")``); it raises if a slice
-    selects no dates. ``seed`` defaults to ``options.seed``.
+    selects no dates. ``seed`` overrides the resolved default.
     """
-    dates = pd.to_datetime(np.asarray(getattr(times, "values", times)))
-    method = method if method is not None else options.method
-    seed = seed if seed is not None else options.seed
+    full_options = options
+    split = full_options.split
+    if seed is None:
+        seed = full_options.resolved_split_seed()
     if verbose is None:
-        verbose = True
+        verbose = full_options.verbose
+
+    dates = pd.to_datetime(np.asarray(getattr(times, "values", times)))
+    method = method if method is not None else split.method
 
     if method == "random":
         difference = (
             min_day_difference
             if min_day_difference is not None
-            else options.min_day_difference
+            else split.min_day_difference
         )
         train_fraction = (
             train_fraction
             if train_fraction is not None
-            else options.train_fraction
+            else split.train_fraction
         )
         val_fraction = (
-            val_fraction if val_fraction is not None else options.val_fraction
+            val_fraction if val_fraction is not None else split.val_fraction
         )
         total = len(dates)
         if n_train is None:
@@ -956,9 +962,9 @@ def train_validation_dates(
         )
         train_dates = dates[train_idx]
         val_dates = dates[val_idx]
-        options.min_day_difference = difference
-        options.train_fraction = train_fraction
-        options.val_fraction = val_fraction
+        split.min_day_difference = difference
+        split.train_fraction = train_fraction
+        split.val_fraction = val_fraction
     elif method == "manual":
         if train_slice is None or val_slice is None:
             raise ValueError(
@@ -990,19 +996,18 @@ def train_validation_dates(
             f"Unknown method {method!r}; choose 'random' or 'manual'"
         )
 
-    options.method = method
-    options.train_dates = [str(d.date()) for d in pd.to_datetime(train_dates)]
-    options.val_dates = [str(d.date()) for d in pd.to_datetime(val_dates)]
-    if seed is not None:
-        options.seed = seed
+    split.method = method
+    split.train_dates = [str(d.date()) for d in pd.to_datetime(train_dates)]
+    split.val_dates = [str(d.date()) for d in pd.to_datetime(val_dates)]
+    split.seed = seed
     if verbose:
         print(
             f"Split method: {method} "
-            f"(train={len(options.train_dates)}, "
-            f"val={len(options.val_dates)} dates)"
+            f"(train={len(split.train_dates)}, "
+            f"val={len(split.val_dates)} dates)"
         )
-        print(f"Training period: {options.training_period()}")
-    return options
+        print(f"Training period: {split.training_period()}")
+    return full_options
 
 
 def make_generator(ds_std, options, *, verbose=None):
@@ -1063,7 +1068,11 @@ def make_generator(ds_std, options, *, verbose=None):
             ),
             output_signature=output_signature,
         )
-        .shuffle(options.fit.shuffle_buffer)
+        .shuffle(
+            options.fit.shuffle_buffer,
+            seed=options.resolved_shuffle_seed(),
+            reshuffle_each_iteration=True,
+        )
         .batch(options.fit.batch_size)
         .repeat()
         .prefetch(tf.data.AUTOTUNE)
@@ -1097,8 +1106,19 @@ def make_generator(ds_std, options, *, verbose=None):
     return train_dataset, val_dataset, train_steps, val_steps
 
 
-def UNet(input_shape):
-    """Build the fully convolutional U-Net used by the fitting notebook."""
+def UNet(input_shape, verbose=None, tile_size=None, input_names=None):
+    """Build the fully convolutional U-Net used by the fitting notebook.
+
+    ``input_shape`` is the Keras input shape ``(height, width, channels)``;
+    height/width may be ``None`` for the fully-convolutional model.
+
+    When ``verbose`` is true, a short summary of the model's expected input and
+    output shapes is printed. ``verbose`` defaults to ``True``; pass an
+    :class:`Options` object's ``options.verbose`` to tie this to the global
+    verbosity. ``tile_size`` (a ``(lat, lon)`` pair) is used only to make the
+    printed shapes concrete; when omitted the spatial dims from ``input_shape``
+    are shown. ``input_names`` are printed as the channel order when provided.
+    """
     import tensorflow as tf
     from tensorflow.keras import Input, layers
 
@@ -1171,6 +1191,23 @@ def UNet(input_shape):
 
     model = tf.keras.Model(inputs, outputs, name="U-net")
     model.compile(optimizer="adam", loss="mse", metrics=["mae"])
+
+    if verbose is None:
+        verbose = True
+    if verbose:
+        num_channels = input_shape[-1]
+        if tile_size is not None:
+            tile_lat, tile_lon = tile_size
+        else:
+            tile_lat, tile_lon = input_shape[0], input_shape[1]
+        print(
+            f"\nModel input shape: (batch, {tile_lat}, {tile_lon}, "
+            f"{num_channels})"
+        )
+        print(f"Model output shape: (batch, {tile_lat}, {tile_lon}, 1)")
+        if input_names is not None:
+            print(f"\nInput names: {list(input_names)}")
+
     return model
 
 

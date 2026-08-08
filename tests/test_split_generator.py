@@ -34,7 +34,7 @@ def test_train_validation_dates_random_spacing():
 
     train_validation_dates(
         ds.time,
-        options.split,
+        options,
         method="random",
         n_train=10,
         n_val=5,
@@ -58,7 +58,7 @@ def test_train_validation_dates_random_infeasible_spacing_errors():
     with pytest.raises(ValueError, match="at most"):
         train_validation_dates(
             ds.time,
-            options.split,
+            options,
             method="random",
             n_train=8,
             n_val=8,
@@ -71,7 +71,7 @@ def test_train_validation_dates_manual_selects_windows():
 
     train_validation_dates(
         ds.time,
-        options.split,
+        options,
         method="manual",
         train_slice=slice("2020-01-01", "2020-01-20"),
         val_slice=slice("2020-01-21", "2020-01-31"),
@@ -88,7 +88,7 @@ def test_train_validation_dates_manual_empty_slice_errors():
     with pytest.raises(ValueError, match="selects no dates"):
         train_validation_dates(
             ds.time,
-            options.split,
+            options,
             method="manual",
             train_slice=slice("2019-01-01", "2019-02-01"),
             val_slice=slice("2020-01-21", "2020-01-31"),
@@ -106,7 +106,7 @@ def test_make_generator_returns_datasets_and_steps():
     ds, ds_std, options = _prepared(days=60)
     train_validation_dates(
         ds.time,
-        options.split,
+        options,
         method="random",
         n_train=12,
         n_val=6,
@@ -139,7 +139,7 @@ def test_build_standardized_lazy_defaults_chunks_from_gridder():
 def test_split_roundtrips_through_dict():
     ds, _, options = _prepared()
     train_validation_dates(
-        ds.time, options.split, method="random", n_train=8, n_val=4, seed=1
+        ds.time, options, method="random", n_train=8, n_val=4, seed=1
     )
 
     assert Options.from_dict(options.to_dict()) == options

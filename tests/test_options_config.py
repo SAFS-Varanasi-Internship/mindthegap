@@ -47,12 +47,13 @@ def test_split_defaults():
 
 
 def test_train_validation_dates_random_populates_split():
-    ds, _ = demo_data(days=100, lat_size=8, lon_size=8, seed=2)
-    split = SplitOptions()
+    ds, metadata = demo_data(days=100, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata)
 
-    result = train_validation_dates(ds.time, split, method="random", seed=7)
+    result = train_validation_dates(ds.time, options, method="random", seed=7)
 
-    assert result is split
+    split = options.split
+    assert result is options
     assert split.method == "random"
     assert split.is_resolved()
     assert len(split.train_dates) == 80
@@ -61,39 +62,44 @@ def test_train_validation_dates_random_populates_split():
 
 
 def test_train_validation_dates_random_is_deterministic():
-    ds, _ = demo_data(days=60, lat_size=8, lon_size=8, seed=3)
+    ds, metadata = demo_data(days=60, lat_size=8, lon_size=8, seed=3)
 
-    a = train_validation_dates(ds.time, SplitOptions(), method="random", seed=5)
-    b = train_validation_dates(ds.time, SplitOptions(), method="random", seed=5)
+    a = train_validation_dates(
+        ds.time, Options.default(data=ds, metadata=metadata), method="random", seed=5
+    )
+    b = train_validation_dates(
+        ds.time, Options.default(data=ds, metadata=metadata), method="random", seed=5
+    )
 
-    assert a.train_dates == b.train_dates
-    assert a.val_dates == b.val_dates
+    assert a.split.train_dates == b.split.train_dates
+    assert a.split.val_dates == b.split.val_dates
 
 
 def test_train_validation_dates_manual_selects_windows():
-    ds, _ = demo_data(days=120, lat_size=8, lon_size=8, seed=2)
-    split = SplitOptions()
+    ds, metadata = demo_data(days=120, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata)
 
     train_validation_dates(
         ds.time,
-        split,
+        options,
         method="manual",
         train_slice=slice("2020-01-01", "2020-02-01"),
         val_slice=slice("2020-02-02", "2020-02-20"),
     )
 
+    split = options.split
     assert split.method == "manual"
     assert split.train_dates[0] == "2020-01-01"
     assert split.is_resolved()
 
 
 def test_train_validation_dates_manual_errors_on_empty_slice():
-    ds, _ = demo_data(days=60, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = demo_data(days=60, lat_size=8, lon_size=8, seed=2)
 
     with pytest.raises(ValueError, match="selects no dates"):
         train_validation_dates(
             ds.time,
-            SplitOptions(),
+            Options.default(data=ds, metadata=metadata),
             method="manual",
             train_slice=slice("1990-01-01", "1990-02-01"),
             val_slice=slice("2020-01-05", "2020-01-20"),
@@ -101,10 +107,12 @@ def test_train_validation_dates_manual_errors_on_empty_slice():
 
 
 def test_train_validation_dates_rejects_unknown_method():
-    ds, _ = demo_data(days=30, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = demo_data(days=30, lat_size=8, lon_size=8, seed=2)
 
     with pytest.raises(ValueError, match="Unknown method"):
-        train_validation_dates(ds.time, SplitOptions(), method="bogus")
+        train_validation_dates(
+            ds.time, Options.default(data=ds, metadata=metadata), method="bogus"
+        )
 
 
 def test_set_config_resolves_gridder_and_fit_not_split():
@@ -202,7 +210,7 @@ def test_build_standardized_lazy_accepts_full_options():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.verbose = False
-    train_validation_dates(ds.time, options.split, seed=1, verbose=False)
+    train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import build_standardized_lazy
 
@@ -239,7 +247,7 @@ def test_build_standardized_lazy_reads_add_geo_from_options():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.data.add_geo = True
-    train_validation_dates(ds.time, options.split, seed=1, verbose=False)
+    train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import build_standardized_lazy
 
@@ -253,6 +261,78 @@ def test_build_standardized_lazy_reads_add_geo_from_options():
 def test_config_roundtrips_through_dict():
     ds, metadata = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default(data=ds, metadata=metadata)
-    train_validation_dates(ds.time, options.split, method="random", seed=1)
+    train_validation_dates(ds.time, options, method="random", seed=1)
 
     assert Options.from_dict(options.to_dict()) == options
+
+
+def test_train_validation_dates_accepts_full_options():
+    ds, metadata = demo_data(days=60, lat_size=16, lon_size=16, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=42)
+
+    result = train_validation_dates(ds.time, options, method="random")
+
+    # The full Options is returned, and the split records the resolved seed.
+    assert result is options
+    assert options.split.is_resolved()
+    assert options.split.seed == options.resolved_split_seed() == 42
+
+
+def test_default_seed_is_random_int_and_stored():
+    a = Options.default()
+    b = Options.default()
+
+    assert isinstance(a.seed, int)
+    assert isinstance(b.seed, int)
+    # Materialized once; per-stage seeds inherit it by default.
+    assert a.resolved_split_seed() == a.seed
+    assert a.resolved_shuffle_seed() == a.seed
+    # Two independent constructions draw different random seeds.
+    assert a.seed != b.seed
+
+
+def test_explicit_seed_pins_global():
+    options = Options.default(seed=42)
+
+    assert options.seed == 42
+    assert options.resolved_split_seed() == 42
+    assert options.resolved_shuffle_seed() == 42
+
+
+def test_per_stage_seeds_override_global():
+    options = Options.default(seed=42)
+    options.split.seed = 7
+    options.fit.shuffle_seed = 9
+
+    assert options.resolved_split_seed() == 7
+    assert options.resolved_shuffle_seed() == 9
+    assert options.resolved_seed() == 42
+
+
+def test_tf_seed_not_set_by_default():
+    options = Options.default(seed=42)
+
+    assert options.fit.tf_seed is None
+
+
+def test_seed_tensorflow_requires_seed_and_records():
+    options = Options.default(seed=42)
+
+    with pytest.raises(ValueError, match="requires an explicit"):
+        options.seed_tensorflow(None)
+
+    options.seed_tensorflow(123)
+    assert options.fit.tf_seed == 123
+
+
+def test_seed_roundtrips_through_dict():
+    options = Options.default(seed=42)
+    options.split.seed = 7
+    options.fit.shuffle_seed = 9
+    options.seed_tensorflow(123)
+
+    restored = Options.from_dict(options.to_dict())
+    assert restored.seed == 42
+    assert restored.split.seed == 7
+    assert restored.fit.shuffle_seed == 9
+    assert restored.fit.tf_seed == 123

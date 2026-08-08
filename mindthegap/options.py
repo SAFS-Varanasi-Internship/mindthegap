@@ -138,6 +138,8 @@ class FitOptions:
     optimizer: str = "adam"
     shuffle_buffer: int = 512
     pixel_budget: int = 40 * 56 * 16
+    shuffle_seed: Optional[int] = None
+    tf_seed: Optional[int] = None
 
     def __post_init__(self):
         if self.epochs <= 0:
@@ -176,7 +178,8 @@ class SplitOptions:
     and also selects the strategy when :func:`mindthegap.train_validation_dates`
     is called without an explicit ``method``. ``train_fraction`` /
     ``val_fraction`` (default 80/20 of the sampled dates) size the random
-    split, and ``seed`` makes the random selection reproducible.
+    split, and ``seed`` (default ``None`` = inherit the global ``options.seed``)
+    makes the random selection reproducible.
     """
 
     method: str = "random"
@@ -338,9 +341,19 @@ class Options:
     data: DataOptions = field(default_factory=DataOptions)
     verbose: bool = True
     smoke_test: bool = False
+    seed: Optional[int] = None
+
+    def __post_init__(self):
+        # Materialize a concrete random global seed once at construction so a
+        # "random" run is still reproducible after the fact (the value is
+        # recorded on save). Passing an explicit ``seed`` pins it up front.
+        if self.seed is None:
+            import secrets
+
+            self.seed = secrets.randbits(32)
 
     @classmethod
-    def default(cls, data=None, metadata=None, smoke_test=False):
+    def default(cls, data=None, metadata=None, smoke_test=False, seed=None):
         """Return a valid initial configuration with default fitting values.
 
         ``data`` starts unresolved and is populated by the pipeline. When a
@@ -349,11 +362,58 @@ class Options:
         :meth:`set_data_config`. When ``smoke_test`` is true the run is
         configured to be fast (``fit.epochs`` is capped at 2); the user can
         still override ``fit.epochs`` afterwards.
+
+        ``seed`` is the single global seed inherited by the per-stage seeds
+        (date sampling, ``tf.data`` shuffling, future synthetic clouds). When
+        ``None`` (the default) a random integer is drawn once and stored, so
+        the run is random by default yet reproducible after the fact (the value
+        is recorded on save). Pass an explicit integer to pin it up front.
+        TensorFlow's global RNG is *not* seeded here; call
+        :meth:`seed_tensorflow` for a fully deterministic run.
         """
-        options = cls(smoke_test=smoke_test)
+        options = cls(smoke_test=smoke_test, seed=seed)
         if data is not None:
             options.set_data_config(data=data, metadata=metadata)
         return options
+
+    def resolved_seed(self):
+        """Return the concrete global seed (always a materialized integer)."""
+        return self.seed
+
+    def resolved_split_seed(self):
+        """Seed for train/validation date sampling (inherits global)."""
+        return self.split.seed if self.split.seed is not None else self.seed
+
+    def resolved_shuffle_seed(self):
+        """Seed for ``tf.data`` shuffling (inherits global)."""
+        return (
+            self.fit.shuffle_seed
+            if self.fit.shuffle_seed is not None
+            else self.seed
+        )
+
+    def seed_tensorflow(self, seed):
+        """Seed TensorFlow's global RNG for a deterministic training run.
+
+        TensorFlow's global random state (model weight initialization, dropout)
+        is process-global and must be set before the model is built; the layers
+        used take no ``seed=`` argument. This helper is therefore the supported
+        way to make TensorFlow deterministic: it applies
+        ``tf.keras.utils.set_random_seed(seed)`` (so callers never import
+        TensorFlow) and records the value on ``options.fit.tf_seed`` so it is
+        serialized with the configuration. ``seed`` is required -- calling this
+        is a deliberate opt-in; by default TensorFlow is left unseeded (random
+        each run). Returns ``self`` for chaining.
+        """
+        if seed is None:
+            raise ValueError(
+                "seed_tensorflow requires an explicit integer seed"
+            )
+        import tensorflow as tf
+
+        tf.keras.utils.set_random_seed(seed)
+        self.fit = replace(self.fit, tf_seed=seed)
+        return self
 
     def set_data_config(self, data, metadata=None):
         """Resolve all data-dependent configuration from a dataset.
@@ -402,6 +462,7 @@ class Options:
             data=DataOptions.from_dict(data.get("data", {})),
             verbose=data.get("verbose", True),
             smoke_test=data.get("smoke_test", False),
+            seed=data.get("seed"),
         )
 
     def __str__(self):
