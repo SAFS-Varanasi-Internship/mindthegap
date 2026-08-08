@@ -8,7 +8,24 @@ from .utils import (
     make_tf_gen,
     build_standardized_lazy,
     make_xbatcher,
+    make_generator,
+    train_validation_dates,
+    make_generator,
+    train_validation_dates,
+    fit_model,
     UNet,
+)
+from .model_bundle import (
+    create_model_bundle_metadata,
+    load_model_bundle,
+    save_model_bundle,
+)
+from .options import (
+    Options,
+    DataOptions,
+    GridderOptions,
+    FitOptions,
+    SplitOptions,
 )
 # Expose the viz module as a submodule (lazy import by users)
 from . import viz  # users can do: from mindthegap import viz; viz.plot_prediction_observed(...)
@@ -22,6 +39,19 @@ __all__ = [
     "make_tf_gen",
     "build_standardized_lazy",
     "make_xbatcher",
+    "make_generator",
+    "train_validation_dates",
+    "make_generator",
+    "train_validation_dates",
+    "fit_model",
     "UNet",
+    "create_model_bundle_metadata",
+    "save_model_bundle",
+    "load_model_bundle",
+    "Options",
+    "DataOptions",
+    "GridderOptions",
+    "FitOptions",
+    "SplitOptions",
     "viz",
 ]
