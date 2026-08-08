@@ -34,10 +34,12 @@ def test_fit_resolve_scales_batch_size():
     assert fit.patience == 10
 
 
-def test_split_defaults_are_unresolved():
+def test_split_defaults():
     split = SplitOptions()
 
-    assert split.method is None
+    assert split.method == "random"
+    assert split.train_fraction == 0.8
+    assert split.val_fraction == 0.2
     assert split.train_dates == []
     assert split.val_dates == []
     assert split.is_resolved() is False
@@ -53,8 +55,8 @@ def test_train_validation_dates_random_populates_split():
     assert result is split
     assert split.method == "random"
     assert split.is_resolved()
-    assert len(split.train_dates) == 50
-    assert len(split.val_dates) == 25
+    assert len(split.train_dates) == 80
+    assert len(split.val_dates) == 20
     assert not (set(split.train_dates) & set(split.val_dates))
 
 
@@ -176,6 +178,76 @@ def test_build_standardized_lazy_defaults_output_chunks_from_gridder():
 
     time_chunk = options.gridder.time_chunk
     assert output.chunks["time"][0] == time_chunk
+
+
+def test_smoke_test_caps_epochs():
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+
+    options = Options.default(data=ds, metadata=metadata, smoke_test=True)
+
+    assert options.smoke_test is True
+    assert options.fit.epochs == 2
+
+
+def test_options_verbose_default_true_and_roundtrips():
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(data=ds, metadata=metadata)
+
+    assert options.verbose is True
+    options.verbose = False
+    assert Options.from_dict(options.to_dict()).verbose is False
+
+
+def test_build_standardized_lazy_accepts_full_options():
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(data=ds, metadata=metadata)
+    options.verbose = False
+    train_validation_dates(ds.time, options.split, seed=1, verbose=False)
+
+    from mindthegap import build_standardized_lazy
+
+    output, _ = build_standardized_lazy(ds, options)
+
+    # train_dates and chunks come from options.split / options.gridder
+    assert output.chunks["time"][0] == options.gridder.time_chunk
+    assert options.data.is_resolved()
+
+
+def test_build_standardized_lazy_errors_when_split_unset():
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(data=ds, metadata=metadata)
+
+    from mindthegap import build_standardized_lazy
+
+    with pytest.raises(ValueError, match="options.split has no dates"):
+        build_standardized_lazy(ds, options)
+
+
+def test_build_standardized_lazy_errors_on_inconsistent_split():
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(data=ds, metadata=metadata)
+    options.split.train_dates = ["1990-01-01"]
+    options.split.val_dates = ["1990-01-02"]
+
+    from mindthegap import build_standardized_lazy
+
+    with pytest.raises(ValueError, match="inconsistent with ds"):
+        build_standardized_lazy(ds, options)
+
+
+def test_build_standardized_lazy_reads_add_geo_from_options():
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(data=ds, metadata=metadata)
+    options.data.add_geo = True
+    train_validation_dates(ds.time, options.split, seed=1, verbose=False)
+
+    from mindthegap import build_standardized_lazy
+
+    build_standardized_lazy(ds, options, verbose=False)
+
+    assert options.data.add_geo is True
+    assert options.data.transforms["add_geo"] is True
+    assert "x_geo" in options.data.input_names
 
 
 def test_config_roundtrips_through_dict():

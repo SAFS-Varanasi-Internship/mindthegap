@@ -497,6 +497,8 @@ def _add_spherical_coords(ds, lat="lat", lon="lon"):
 
 def build_standardized_lazy(
     ds,
+    options=None,
+    *,
     target_variable=None,
     missing_flag=None,
     land_flag=None,
@@ -507,9 +509,9 @@ def build_standardized_lazy(
     missing_flag_shift=10,
     n_temporal_lags=None,
     output_chunks=None,
-    add_geo=False,
-    options=None,
+    add_geo=None,
     gridder=None,
+    verbose=None,
 ):
     """Build lazy model inputs, targets, and standardization statistics.
 
@@ -518,18 +520,61 @@ def build_standardized_lazy(
     feature variables, and optional spherical coordinates. If output_chunks is not 
     None, then a dask array with output_chunks chunking is returned.
 
-    Returns ``(output, stats)``. When ``options`` (a :class:`DataOptions`) is
-    provided, variable names, ``features``, ``log_target``, and
-    ``n_temporal_lags`` default to the values already resolved on it, so callers
-    do not repeat them; ``std_vars`` defaults to ``options.features`` (features
-    are standardized, the target is not). When a ``gridder``
-    (:class:`GridderOptions`) is provided, ``output_chunks`` defaults to that
-    gridder's tile/time layout for efficient xbatcher reads. ``options`` is then
-    populated in place with the canonical resolved data configuration (bounds,
-    input channel names/order, transforms, standardization statistics, and
-    target mean/std) so downstream functions and the saved model bundle can
-    reproduce these inputs.
+    Returns ``(output, stats)``. The recommended call is
+    ``build_standardized_lazy(ds, options)`` where ``options`` is the full
+    :class:`Options` object: the variable names/features/``log_target`` /
+    ``n_temporal_lags`` / ``add_geo`` come from ``options.data``, the output
+    chunking from ``options.gridder``, and ``train_dates`` from
+    ``options.split.train_selection()`` (do not pass ``train_dates`` yourself).
+    It raises with instructions if the split has not been chosen or selects
+    dates absent from ``ds``. Passing a :class:`DataOptions` as ``options`` is
+    also supported for advanced use. ``options.data`` is populated in place with
+    the canonical resolved data configuration (bounds, input channel
+    names/order, transforms, standardization statistics, and target mean/std) so
+    downstream functions and the saved model bundle can reproduce these inputs.
     """
+    from .options import Options as _Options
+
+    # Accept the full Options object: pull the data/gridder/split sections from
+    # it, take train_dates from the resolved split, and validate consistency.
+    if isinstance(options, _Options):
+        full = options
+        if not full.data.is_resolved() and not full.data.target_variable:
+            raise ValueError(
+                "options.data is not configured; call "
+                "options.set_data_config(data=ds, metadata=...) first"
+            )
+        if not full.split.is_resolved():
+            raise ValueError(
+                "options.split has no dates; call "
+                "mtg.train_validation_dates(ds.time, options.split) before "
+                "building the standardized dataset"
+            )
+        split_selection = full.split.train_selection()
+        available = pd.DatetimeIndex(
+            pd.to_datetime(np.asarray(ds["time"].values))
+        ).normalize()
+        chosen = pd.DatetimeIndex(split_selection).normalize()
+        missing_dates = chosen.difference(available)
+        if len(missing_dates) > 0:
+            sample = ", ".join(str(d.date()) for d in missing_dates[:3])
+            raise ValueError(
+                "options.split is inconsistent with ds: "
+                f"{len(missing_dates)} training date(s) are not in the "
+                f"dataset time coordinate (e.g. {sample}). Re-run "
+                "mtg.train_validation_dates on this dataset's ds.time."
+            )
+        if train_dates is None:
+            train_dates = split_selection
+        if gridder is None:
+            gridder = full.gridder
+        if verbose is None:
+            verbose = full.verbose
+        options = full.data
+
+    if verbose is None:
+        verbose = False
+
     std_vars_supplied = std_vars is not None
     if options is not None:
         target_variable = (
@@ -547,6 +592,8 @@ def build_standardized_lazy(
             log_target = options.log_target
         if n_temporal_lags is None:
             n_temporal_lags = options.n_temporal_lags
+        if add_geo is None:
+            add_geo = options.add_geo
 
     if gridder is not None and output_chunks is None:
         output_chunks = {
@@ -562,6 +609,7 @@ def build_standardized_lazy(
         )
     log_target = False if log_target is None else log_target
     n_temporal_lags = 1 if n_temporal_lags is None else n_temporal_lags
+    add_geo = False if add_geo is None else add_geo
 
     features = list(features or [])
     required = [target_variable, *features, missing_flag, land_flag]
@@ -703,6 +751,7 @@ def build_standardized_lazy(
         options.input_names = input_names
         options.log_target = bool(log_target)
         options.n_temporal_lags = n_temporal_lags
+        options.add_geo = bool(add_geo)
         options.transforms = {
             "target": "natural logarithm" if log_target else "none",
             "temporal_lags": n_temporal_lags,
@@ -722,6 +771,18 @@ def build_standardized_lazy(
             "Missing predictor values are replaced with zero after "
             "standardization; mask channels identify land and missing data."
         )
+
+    if verbose:
+        input_names = [name for name in output_vars if name != "full_target"]
+        print(f"Channels created ({len(input_names)} total):")
+        for i, ch in enumerate(input_names, 1):
+            print(f"  {i}. {ch}")
+        print(
+            "Target standardization: "
+            f"mean={means['full_target']:.4f}, "
+            f"std={standard_deviations['full_target']:.4f}"
+        )
+        print(f"Dataset is LAZY (not in memory): {output.chunks}")
 
     return output, stats
 
@@ -834,15 +895,16 @@ def train_validation_dates(
     times,
     options,
     *,
-    method="random",
-    train_fraction=0.5,
-    val_fraction=0.25,
+    method=None,
+    train_fraction=None,
+    val_fraction=None,
     n_train=None,
     n_val=None,
     train_slice=None,
     val_slice=None,
     min_day_difference=None,
     seed=None,
+    verbose=None,
 ):
     """Choose training and validation dates and record them on ``options``.
 
@@ -851,20 +913,34 @@ def train_validation_dates(
     and ``val_dates`` are populated with the selected ISO date strings and its
     ``method`` is recorded. Returns ``options``.
 
-    ``method="random"`` samples spaced-out dates for train/validation using
-    ``min_day_difference`` (defaults to ``options.min_day_difference``); the
-    counts come from ``n_train``/``n_val`` or from ``train_fraction`` /
-    ``val_fraction`` of the record. ``method="manual"`` selects dates falling in
-    ``train_slice`` and ``val_slice`` (``slice("1997-01-01", "2000-01-01")``);
-    it raises if a slice selects no dates.
+    ``method`` defaults to ``options.method``. ``method="random"`` samples
+    spaced-out dates for train/validation using ``min_day_difference`` (defaults
+    to ``options.min_day_difference``); the counts come from ``n_train`` /
+    ``n_val`` or from ``train_fraction`` / ``val_fraction`` (defaulting to
+    ``options.train_fraction`` / ``options.val_fraction``, i.e. 80/20 of the
+    record). ``method="manual"`` selects dates falling in ``train_slice`` and
+    ``val_slice`` (``slice("1997-01-01", "2000-01-01")``); it raises if a slice
+    selects no dates. ``seed`` defaults to ``options.seed``.
     """
     dates = pd.to_datetime(np.asarray(getattr(times, "values", times)))
+    method = method if method is not None else options.method
+    seed = seed if seed is not None else options.seed
+    if verbose is None:
+        verbose = True
 
     if method == "random":
         difference = (
             min_day_difference
             if min_day_difference is not None
             else options.min_day_difference
+        )
+        train_fraction = (
+            train_fraction
+            if train_fraction is not None
+            else options.train_fraction
+        )
+        val_fraction = (
+            val_fraction if val_fraction is not None else options.val_fraction
         )
         total = len(dates)
         if n_train is None:
@@ -876,11 +952,13 @@ def train_validation_dates(
             n_train,
             n_val,
             min_day_difference=difference,
-            seed=seed if seed is not None else options.seed,
+            seed=seed,
         )
         train_dates = dates[train_idx]
         val_dates = dates[val_idx]
         options.min_day_difference = difference
+        options.train_fraction = train_fraction
+        options.val_fraction = val_fraction
     elif method == "manual":
         if train_slice is None or val_slice is None:
             raise ValueError(
@@ -917,10 +995,17 @@ def train_validation_dates(
     options.val_dates = [str(d.date()) for d in pd.to_datetime(val_dates)]
     if seed is not None:
         options.seed = seed
+    if verbose:
+        print(
+            f"Split method: {method} "
+            f"(train={len(options.train_dates)}, "
+            f"val={len(options.val_dates)} dates)"
+        )
+        print(f"Training period: {options.training_period()}")
     return options
 
 
-def make_generator(ds_std, options):
+def make_generator(ds_std, options, *, verbose=None):
     """Build train/validation TensorFlow datasets from a standardized dataset.
 
     ``options`` is the full :class:`Options` object. The training and validation
@@ -928,10 +1013,12 @@ def make_generator(ds_std, options):
     channel order/target from ``options.data``, and batching from
     ``options.fit``. Returns ``(train_dataset, val_dataset, train_steps,
     val_steps)`` so the notebook does not manage the intermediate ``ds_train`` /
-    ``ds_val`` or step counts.
+    ``ds_val`` or step counts. ``verbose`` defaults to ``options.verbose``.
     """
     import tensorflow as tf
 
+    if verbose is None:
+        verbose = options.verbose
     if not options.split.is_resolved():
         raise ValueError(
             "options.split has no dates; call mtg.train_validation_dates first"
@@ -1001,6 +1088,12 @@ def make_generator(ds_std, options):
     val_steps = max(
         1, (len(val_batcher) * val_gridder.time_chunk) // options.fit.batch_size
     )
+    if verbose:
+        print(
+            "Streaming datasets ready "
+            f"(batch size {options.fit.batch_size}): "
+            f"steps per epoch train={train_steps}, val={val_steps}"
+        )
     return train_dataset, val_dataset, train_steps, val_steps
 
 
@@ -1090,15 +1183,27 @@ def fit_model(
     steps_per_epoch=None,
     validation_steps=None,
     callbacks=None,
-    verbose=1,
+    verbose=None,
 ):
-    """Fit a model using a :class:`FitOptions` configuration section.
+    """Fit a model using the training configuration on ``options``.
 
-    ``options`` supplies epochs, batch size, learning rate, patience, loss, and
-    optimizer so these choices are not threaded individually through the
-    pipeline. Returns the Keras ``History`` object.
+    ``options`` may be the full :class:`Options` object (``options.fit`` is
+    used, and ``options.verbose`` sets the default verbosity) or a
+    :class:`FitOptions` section directly. It supplies epochs, batch size,
+    learning rate, patience, loss, and optimizer so these choices are not
+    threaded individually through the pipeline. Returns the Keras ``History``
+    object.
     """
     import tensorflow as tf
+
+    from .options import Options as _Options
+
+    options_verbose = None
+    if isinstance(options, _Options):
+        options_verbose = options.verbose
+        options = options.fit
+    if verbose is None:
+        verbose = 1 if (options_verbose is None or options_verbose) else 0
 
     optimizers = {
         "adam": tf.keras.optimizers.Adam,
@@ -1126,7 +1231,14 @@ def fit_model(
             )
         ]
 
-    return model.fit(
+    if verbose:
+        print(
+            "Starting training: "
+            f"epochs={options.epochs}, batch_size={options.batch_size}, "
+            f"patience={options.patience}"
+        )
+
+    history = model.fit(
         train_data,
         epochs=options.epochs,
         steps_per_epoch=steps_per_epoch,
@@ -1135,3 +1247,10 @@ def fit_model(
         callbacks=callbacks,
         verbose=verbose,
     )
+
+    if verbose and "val_loss" in history.history:
+        print(
+            f"Best val_loss: {min(history.history['val_loss']):.6f}; "
+            f"final train_loss: {history.history['loss'][-1]:.6f}"
+        )
+    return history

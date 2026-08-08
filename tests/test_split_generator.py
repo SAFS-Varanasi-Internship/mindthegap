@@ -26,7 +26,7 @@ def test_split_starts_unresolved_after_set_config():
     options = Options.default(data=ds, metadata=metadata)
 
     assert options.split.is_resolved() is False
-    assert options.split.method is None
+    assert options.split.method == "random"
 
 
 def test_train_validation_dates_random_spacing():

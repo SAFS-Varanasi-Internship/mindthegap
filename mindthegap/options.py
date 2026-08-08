@@ -172,14 +172,35 @@ class SplitOptions:
     strings) used to subset the standardized dataset. They are produced by
     :func:`mindthegap.train_validation_dates`, not by an implicit heuristic, so
     the split strategy is not configured until the user chooses one.
-    ``method`` records how they were produced (``"random"`` or ``"manual"``).
+    ``method`` records how they were produced (``"random"`` or ``"manual"``)
+    and also selects the strategy when :func:`mindthegap.train_validation_dates`
+    is called without an explicit ``method``. ``train_fraction`` /
+    ``val_fraction`` (default 80/20 of the sampled dates) size the random
+    split, and ``seed`` makes the random selection reproducible.
     """
 
-    method: Optional[str] = None
+    method: str = "random"
+    train_fraction: float = 0.8
+    val_fraction: float = 0.2
     train_dates: list = field(default_factory=list)
     val_dates: list = field(default_factory=list)
     min_day_difference: int = 1
     seed: Optional[int] = None
+
+    def __post_init__(self):
+        if self.method not in ("random", "manual"):
+            raise ValueError(
+                f"Unsupported split method {self.method!r}; "
+                "choose 'random' or 'manual'"
+            )
+        if not 0 < self.train_fraction < 1:
+            raise ValueError("train_fraction must be between 0 and 1")
+        if not 0 < self.val_fraction < 1:
+            raise ValueError("val_fraction must be between 0 and 1")
+        if self.train_fraction + self.val_fraction > 1:
+            raise ValueError(
+                "train_fraction + val_fraction must not exceed 1"
+            )
 
     def is_resolved(self):
         """Return ``True`` once train and validation dates have been chosen."""
@@ -234,6 +255,7 @@ class DataOptions:
     features: list = field(default_factory=list)
     log_target: bool = False
     n_temporal_lags: int = 1
+    add_geo: bool = False
     input_names: list = field(default_factory=list)
     transforms: dict = field(default_factory=dict)
     standardization: dict = field(default_factory=dict)
@@ -314,17 +336,21 @@ class Options:
     fit: FitOptions = field(default_factory=FitOptions)
     split: SplitOptions = field(default_factory=SplitOptions)
     data: DataOptions = field(default_factory=DataOptions)
+    verbose: bool = True
+    smoke_test: bool = False
 
     @classmethod
-    def default(cls, data=None, metadata=None):
+    def default(cls, data=None, metadata=None, smoke_test=False):
         """Return a valid initial configuration with default fitting values.
 
         ``data`` starts unresolved and is populated by the pipeline. When a
         loaded dataset ``data`` (and its ``metadata``) is supplied, the
         data-dependent sections are resolved immediately via
-        :meth:`set_data_config`.
+        :meth:`set_data_config`. When ``smoke_test`` is true the run is
+        configured to be fast (``fit.epochs`` is capped at 2); the user can
+        still override ``fit.epochs`` afterwards.
         """
-        options = cls()
+        options = cls(smoke_test=smoke_test)
         if data is not None:
             options.set_data_config(data=data, metadata=metadata)
         return options
@@ -349,13 +375,16 @@ class Options:
 
         Derives tile size and time chunk (``gridder``) and the batch size
         (``fit``) from the dataset so these heuristics live in the package
-        rather than in notebooks. The train/validation split is left
-        unresolved until the user selects one via
+        rather than in notebooks. When ``smoke_test`` is set, ``fit.epochs`` is
+        capped at 2 for a fast validation run. The train/validation split is
+        left unresolved until the user selects one via
         :func:`mindthegap.train_validation_dates`. Returns ``self`` for
         chaining.
         """
         self.gridder = self.gridder.resolve_for(ds)
         self.fit = self.fit.resolve_for(self.gridder.tile_size)
+        if self.smoke_test:
+            self.fit = replace(self.fit, epochs=min(self.fit.epochs, 2))
         return self
 
     def to_dict(self):
@@ -371,6 +400,8 @@ class Options:
             fit=FitOptions.from_dict(data.get("fit", {})),
             split=SplitOptions.from_dict(data.get("split", {})),
             data=DataOptions.from_dict(data.get("data", {})),
+            verbose=data.get("verbose", True),
+            smoke_test=data.get("smoke_test", False),
         )
 
     def __str__(self):
@@ -383,6 +414,9 @@ def _render(options: "Options") -> str:
     lines = ["Options("]
     for section in fields(options):
         value = getattr(options, section.name)
+        if not is_dataclass(value):
+            lines.append(f"  {section.name} = {value!r}")
+            continue
         lines.append(f"  {section.name}:")
         for item in fields(value):
             lines.append(f"    {item.name} = {getattr(value, item.name)!r}")
