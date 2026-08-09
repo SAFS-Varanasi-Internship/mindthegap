@@ -31,10 +31,10 @@ def demo_data(
     seed=42,
     cloud_fraction=0.12,
 ):
-    """Load a chlorophyll dataset and return ``(dataset, metadata)``.
+    """Load a dataset and return ``(dataset, metadata)``.
 
     ``dataset`` may be ``"pace"``, ``"globcolour"``,
-    ``"indian-ocean"``, or ``"synthetic"``. ``region`` may be a supported
+    ``"indian-ocean"``, ``"io-shared-public"`` or ``"synthetic"``. ``region`` may be a supported
     name or ``[lat_min, lat_max, lon_min, lon_max]``. ``None`` selects the
     full spatial extent.
 
@@ -49,6 +49,7 @@ def demo_data(
         "pace": _load_pace,
         "globcolour": _load_globcolour,
         "indian-ocean": _load_indian_ocean,
+        "io-shared-public": _load_io_shared_public,
         "synthetic": _load_synthetic,
     }
     if dataset not in loaders:
@@ -142,6 +143,13 @@ def _dataset_config(dataset):
         "indian-ocean": {
             "name": "Indian Ocean",
             "product_id": "mind_the_chl_gap/IO_rechunked.zarr",
+            "target": "CHL_cmes-level3",
+            "missing_flag": "CHL_cmes-cloud",
+            "land_flag": "CHL_cmes-land",
+        },
+        "io-shared-public": {
+            "name": "IO rechunkded in shared-public",
+            "product_id": "shared-public/IO_rechunked.zarr",
             "target": "CHL_cmes-level3",
             "missing_flag": "CHL_cmes-cloud",
             "land_flag": "CHL_cmes-land",
@@ -398,6 +406,17 @@ def _load_indian_ocean():
     )
     return ds
 
+def _load_io_shared_public():
+    ds = xr.open_dataset(
+        "/home/jovyan/shared-public/mindthegap/data/"
+        "IO_rechunked.zarr",
+        engine="zarr",
+        consolidated=True,
+    )
+    land_flag_2d = ds.sst.isel(time=0).isnull()
+    land_flag = land_flag_2d.broadcast_like(ds.sst).astype("int8")
+    ds["CHL_cmes-land"] = land_flag
+    return ds
 
 def crop_to_multiple(
     ds: Union[xr.Dataset, xr.DataArray],
