@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from mindthegap import build_standardized_lazy, demo_data
+from mindthegap.data import build_standardized_lazy, demo_data
 
 
 def test_demo_data_has_requested_shape_and_flags():

@@ -1,17 +1,19 @@
 # Re-export the primary functions (explicit, stable API)
-from .utils import (
+from .data import (
     demo_data,
     crop_to_multiple,
+    build_standardized_lazy,
+    train_validation_dates,
+)
+from .evaluation import (
     unstdize,
     compute_mae,
     compute_mse,
+)
+from .model import (
     make_tf_gen,
-    build_standardized_lazy,
     make_xbatcher,
     make_generator,
-    train_validation_dates,
-    make_generator,
-    train_validation_dates,
     fit_model,
     UNet,
 )
@@ -39,8 +41,6 @@ __all__ = [
     "make_tf_gen",
     "build_standardized_lazy",
     "make_xbatcher",
-    "make_generator",
-    "train_validation_dates",
     "make_generator",
     "train_validation_dates",
     "fit_model",
