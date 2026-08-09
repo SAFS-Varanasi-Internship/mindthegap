@@ -109,16 +109,16 @@ def flag_frame(
     dataset,
     date,
     land_flag="land_flag",
-    missing_flag="true_missing_flag",
-    synthetic_flag="synthetic_missing_flag",
+    missing_flag="unavailable_flag",
+    estimate_flag="estimate_flag",
 ):
     """Build categorical map values for land, held-out, observed, and missing."""
     land = _frame(dataset, land_flag, date).values == 1
     missing = _frame(dataset, missing_flag, date).values == 1
-    synthetic = _frame(dataset, synthetic_flag, date).values == 1
+    estimate = _frame(dataset, estimate_flag, date).values == 1
 
     flags = np.full(land.shape, 2, dtype="int8")
-    flags[synthetic] = 1
+    flags[estimate] = 1
     flags[missing] = 3
     flags[land] = 0
     return xr.DataArray(
@@ -140,6 +140,23 @@ def _new_map_axis(figsize=(7, 5)):
     return figure, axis
 
 
+LAND_COLOR = "gray"
+
+
+def _land_mask(dataset, date, land_flag="land_flag"):
+    """Return a boolean land mask (lat, lon) for one date, or None.
+
+    Returns ``None`` when the variable is absent or no pixels are land, so no
+    empty land overlay is drawn.
+    """
+    if dataset is None or land_flag not in dataset:
+        return None
+    mask = _frame(dataset, land_flag, date).values == 1
+    if not mask.any():
+        return None
+    return mask
+
+
 def _plot_map_panel(
     data,
     *,
@@ -150,13 +167,22 @@ def _plot_map_panel(
     vmax=None,
     colorbar=True,
     colorbar_label=None,
+    colorbar_ticks=None,
+    colorbar_ticklabels=None,
+    land_mask=None,
 ):
     own_axis = ax is None
     if own_axis:
         _, ax = _new_map_axis()
     extent = _map_extent(data)
+
+    if isinstance(cmap, str):
+        cmap = plt.get_cmap(cmap).copy()
+    else:
+        cmap = cmap.copy()
+
     image = ax.imshow(
-        data.values,
+        np.asarray(data.values, dtype=float),
         extent=extent,
         origin="upper",
         transform=ccrs.PlateCarree(),
@@ -165,6 +191,20 @@ def _plot_map_panel(
         vmin=vmin,
         vmax=vmax,
     )
+    if land_mask is not None:
+        # Paint land gray as a separate overlay so genuine gaps/clouds (NaN in
+        # the data) stay the axes background (white) rather than being colored.
+        land_overlay = np.where(land_mask, 1.0, np.nan)
+        ax.imshow(
+            land_overlay,
+            extent=extent,
+            origin="upper",
+            transform=ccrs.PlateCarree(),
+            interpolation="nearest",
+            cmap=ListedColormap([LAND_COLOR]),
+            vmin=0,
+            vmax=1,
+        )
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
     ax.set_extent(extent, crs=ccrs.PlateCarree())
     ax.set_box_aspect(
@@ -177,7 +217,16 @@ def _plot_map_panel(
     ax.set_ylabel("latitude")
     ax.set_title(title)
     if colorbar:
-        ax.figure.colorbar(image, ax=ax, label=colorbar_label)
+        colorbar_object = ax.figure.colorbar(
+            image,
+            ax=ax,
+            label=colorbar_label,
+            fraction=0.046,
+            pad=0.04,
+            ticks=colorbar_ticks,
+        )
+        if colorbar_ticklabels is not None:
+            colorbar_object.ax.set_yticklabels(colorbar_ticklabels)
     if own_axis:
         plt.show()
     return image
@@ -195,7 +244,7 @@ def plot_observed(
     vmax=None,
     colorbar=True,
 ):
-    """Plot the observed target for one date."""
+    """Plot the observed target for one date (land shown in gray)."""
     observed = (
         observed
         if observed is not None
@@ -209,6 +258,7 @@ def plot_observed(
         vmax=vmax,
         colorbar=colorbar,
         colorbar_label="target",
+        land_mask=_land_mask(dataset, date),
     )
 
 
@@ -225,7 +275,7 @@ def plot_prediction(
     vmax=None,
     colorbar=True,
 ):
-    """Predict and plot a gap-filled target for one date."""
+    """Predict and plot a gap-filled target for one date (land shown in gray)."""
     prediction = (
         prediction
         if prediction is not None
@@ -239,6 +289,7 @@ def plot_prediction(
         vmax=vmax,
         colorbar=colorbar,
         colorbar_label="target",
+        land_mask=_land_mask(dataset, date),
     )
 
 
@@ -252,25 +303,17 @@ def plot_flags(
 ):
     """Plot land, synthetic gaps, observed water, and real missing data."""
     flags = flags if flags is not None else flag_frame(dataset, date)
-    image = _plot_map_panel(
+    return _plot_map_panel(
         flags,
         ax=ax,
         title=f"Data flags: {date}",
-        cmap=ListedColormap(["gray", "teal", "yellow", "darkblue"]),
+        cmap=ListedColormap([LAND_COLOR, "teal", "yellow", "darkblue"]),
         vmin=-0.5,
         vmax=3.5,
-        colorbar=False,
+        colorbar=colorbar,
+        colorbar_ticks=[0, 1, 2, 3],
+        colorbar_ticklabels=["land", "held out", "observed", "missing"],
     )
-    if colorbar:
-        colorbar_object = image.axes.figure.colorbar(
-            image,
-            ax=image.axes,
-            ticks=[0, 1, 2, 3],
-        )
-        colorbar_object.ax.set_yticklabels(
-            ["land", "held out", "observed", "missing"]
-        )
-    return image
 
 
 def plot_difference(
@@ -307,6 +350,7 @@ def plot_difference(
         vmax=limit,
         colorbar=colorbar,
         colorbar_label="difference",
+        land_mask=_land_mask(dataset, date),
     )
 
 
@@ -384,12 +428,14 @@ def plot_prediction_observed(
         observed_image,
         ax=[axes[0, 0], axes[1, 0]],
         label="target",
-        fraction=0.03,
+        fraction=0.046,
+        pad=0.04,
     )
     figure.colorbar(
         difference_image,
         ax=axes[1, 1],
         label="observed - prediction",
         fraction=0.046,
+        pad=0.04,
     )
     return figure, axes

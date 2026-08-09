@@ -16,6 +16,60 @@ DEMO_REGIONS = {
 }
 
 
+def _demo_data_call(
+    *,
+    dataset,
+    region,
+    time_slice,
+    smoke_test,
+    smoke_days,
+    smoke_size,
+    days,
+    lat_size,
+    lon_size,
+    start,
+    seed,
+    cloud_fraction,
+):
+    """Reconstruct the ``demo_data(...)`` call that produced a dataset.
+
+    Returns a string such as ``demo_data(dataset='synthetic', days=30)`` that
+    records exactly how the demo dataset was loaded, so it can be stored in the
+    options/model-bundle metadata and printed by
+    :func:`mindthegap.load_model_bundle`.
+    """
+
+    def _fmt(value):
+        if isinstance(value, slice):
+            parts = ", ".join(repr(p) for p in (value.start, value.stop))
+            return f"slice({parts})"
+        return repr(value)
+
+    parts = [f"dataset={dataset!r}"]
+    if region is not None:
+        parts.append(f"region={_fmt(region)}")
+    if time_slice is not None:
+        parts.append(f"time_slice={_fmt(time_slice)}")
+    if smoke_test:
+        parts.append("smoke_test=True")
+        if smoke_days != 120:
+            parts.append(f"smoke_days={smoke_days}")
+        if smoke_size != 128:
+            parts.append(f"smoke_size={smoke_size}")
+    if dataset == "synthetic":
+        for name, value, default in (
+            ("days", days, 120),
+            ("lat_size", lat_size, 16),
+            ("lon_size", lon_size, 16),
+            ("start", start, "2020-01-01"),
+            ("seed", seed, 42),
+            ("cloud_fraction", cloud_fraction, 0.12),
+        ):
+            if value != default:
+                parts.append(f"{name}={value!r}")
+    return "demo_data(" + ", ".join(parts) + ")"
+
+
 def demo_data(
     dataset="synthetic",
     region=None,
@@ -31,10 +85,10 @@ def demo_data(
     seed=42,
     cloud_fraction=0.12,
 ):
-    """Load a chlorophyll dataset and return ``(dataset, metadata)``.
+    """Load a dataset and return ``(dataset, metadata)``.
 
     ``dataset`` may be ``"pace"``, ``"globcolour"``,
-    ``"indian-ocean"``, or ``"synthetic"``. ``region`` may be a supported
+    ``"indian-ocean"``, ``"io-shared-public"`` or ``"synthetic"``. ``region`` may be a supported
     name or ``[lat_min, lat_max, lon_min, lon_max]``. ``None`` selects the
     full spatial extent.
 
@@ -49,11 +103,27 @@ def demo_data(
         "pace": _load_pace,
         "globcolour": _load_globcolour,
         "indian-ocean": _load_indian_ocean,
+        "io-shared-public": _load_io_shared_public,
         "synthetic": _load_synthetic,
     }
     if dataset not in loaders:
         choices = ", ".join(loaders)
         raise ValueError(f"Unknown dataset {dataset!r}; choose from: {choices}")
+
+    data_source = _demo_data_call(
+        dataset=dataset,
+        region=region,
+        time_slice=time_slice,
+        smoke_test=smoke_test,
+        smoke_days=smoke_days,
+        smoke_size=smoke_size,
+        days=days,
+        lat_size=lat_size,
+        lon_size=lon_size,
+        start=start,
+        seed=seed,
+        cloud_fraction=cloud_fraction,
+    )
 
     if dataset == "synthetic":
         if smoke_test:
@@ -118,6 +188,7 @@ def demo_data(
     }
     if region_name is not None:
         metadata["dataset"]["region_name"] = region_name
+    metadata["dataset"]["data_source"] = data_source
     return ds, metadata
 
 
@@ -142,6 +213,13 @@ def _dataset_config(dataset):
         "indian-ocean": {
             "name": "Indian Ocean",
             "product_id": "mind_the_chl_gap/IO_rechunked.zarr",
+            "target": "CHL_cmes-level3",
+            "missing_flag": "CHL_cmes-cloud",
+            "land_flag": "CHL_cmes-land",
+        },
+        "io-shared-public": {
+            "name": "IO rechunkded in shared-public",
+            "product_id": "shared-public/IO_rechunked.zarr",
             "target": "CHL_cmes-level3",
             "missing_flag": "CHL_cmes-cloud",
             "land_flag": "CHL_cmes-land",
@@ -398,6 +476,17 @@ def _load_indian_ocean():
     )
     return ds
 
+def _load_io_shared_public():
+    ds = xr.open_dataset(
+        "/home/jovyan/shared-public/mindthegap/data/"
+        "IO_rechunked.zarr",
+        engine="zarr",
+        consolidated=True,
+    )
+    land_flag_2d = ds.sst.isel(time=0).isnull()
+    land_flag = land_flag_2d.broadcast_like(ds.sst).astype("int8")
+    ds["CHL_cmes-land"] = land_flag
+    return ds
 
 def crop_to_multiple(
     ds: Union[xr.Dataset, xr.DataArray],
@@ -469,14 +558,75 @@ def build_standardized_lazy(
     output_chunks=None,
     add_geo=None,
     gridder=None,
+    mode="train",
     verbose=None,
 ):
     """Build lazy model inputs, targets, and standardization statistics.
 
-    The returned dataset contains the transformed target, a synthetically masked
-    target, temporal target lags, seasonal channels, missingness flags, optional
-    feature variables, and optional spherical coordinates. If output_chunks is not 
-    None, then a dask array with output_chunks chunking is returned.
+    The returned dataset contains the transformed target, the target values
+    the model can actually observe (``observed_target``), temporal lags of
+    that observed target, seasonal channels, three per-pixel state flags,
+    optional feature variables, and optional spherical coordinates. If
+    ``output_chunks`` is not None, then a dask array with ``output_chunks``
+    chunking is returned.
+
+    Channel semantics
+    -----------------
+    The flags tell the model how to use the inputs (or, more precisely, how the
+    model has learned to use them):
+
+    ``observed_target``
+        The target values actually available to the model. Missing predictor
+        values are later represented as 0. ``observed_target_m{n}`` /
+        ``observed_target_p{n}`` are its temporal lags/leads.
+    ``observed_flag``
+        1 means there is a value in ``observed_target`` at that pixel and the
+        model should use it.
+    ``estimate_flag``
+        1 means there is no observed value in the inputs at that pixel and the
+        model should estimate it.
+    ``unavailable_flag``
+        1 means there is no information for that pixel, so the estimate is set
+        to 0.
+    ``land_flag``
+        1 means land; the estimate is set to 0 (and masked later).
+
+    During training
+    ---------------
+    Synthetic clouds are created over the observed data. Where synthetic clouds
+    are, ``estimate_flag = 1``; during training there must be a true observed
+    value for the pixels where ``estimate_flag = 1`` (that known value supplies
+    the learning signal). ``unavailable_flag`` marks the true clouds or NaNs in
+    the observed data. ``land_flag`` is included so the model can learn
+    coastlines, islands, and similar structure.
+
+    The intended per-pixel states are:
+
+    ==================  ============  ============  ================  =========
+    state               observed_flag estimate_flag unavailable_flag  land_flag
+    ==================  ============  ============  ================  =========
+    observed ocean            1             0              0              0
+    synthetic gap             0             1              0              0
+    true missing ocean        0             0              1              0
+    land                      0             0              0              1
+    ==================  ============  ============  ================  =========
+
+    Modes
+    -----
+    ``mode="train"`` (default) produces the self-supervised training inputs
+    described above: temporally-shifted synthetic gaps are punched into the
+    observed data (``estimate_flag=1`` there, with the true value retained as
+    the learning target) and real clouds become ``unavailable_flag=1``.
+
+    ``mode="gapfill"`` produces inference inputs for gap-filling. No synthetic
+    clouds are created: ``observed_target`` is the real observed data,
+    ``observed_flag`` marks the real observations, real cloud/NaN ocean pixels
+    become ``estimate_flag=1`` (the pixels to fill), and ``unavailable_flag`` is
+    0 everywhere. Every other channel (temporal lags, seasonal, geo, land) is
+    computed identically to training so the inputs match the trained model. In
+    this mode the split is not required and, when a resolved
+    :class:`DataOptions` is supplied, the recorded standardization statistics
+    are reused (``train_dates`` is ignored) so inputs match training exactly.
 
     Returns ``(output, stats)``. The recommended call is
     ``build_standardized_lazy(ds, options)`` where ``options`` is the full
@@ -486,12 +636,18 @@ def build_standardized_lazy(
     ``options.split.train_selection()`` (do not pass ``train_dates`` yourself).
     It raises with instructions if the split has not been chosen or selects
     dates absent from ``ds``. Passing a :class:`DataOptions` as ``options`` is
-    also supported for advanced use. ``options.data`` is populated in place with
-    the canonical resolved data configuration (bounds, input channel
-    names/order, transforms, standardization statistics, and target mean/std) so
-    downstream functions and the saved model bundle can reproduce these inputs.
+    also supported for advanced use. In ``mode="train"`` ``options.data`` is
+    populated in place with the canonical resolved data configuration (bounds,
+    input channel names/order, transforms, standardization statistics, and
+    target mean/std) so downstream functions and the saved model bundle can
+    reproduce these inputs; ``mode="gapfill"`` leaves ``options`` untouched.
     """
     from .options import Options as _Options
+
+    if mode not in ("train", "gapfill"):
+        raise ValueError(
+            f"mode must be 'train' or 'gapfill', got {mode!r}"
+        )
 
     # Accept the full Options object: pull the data/gridder/split sections from
     # it, take train_dates from the resolved split, and validate consistency.
@@ -502,28 +658,29 @@ def build_standardized_lazy(
                 "options.data is not configured; call "
                 "options.set_data_config(data=ds, metadata=...) first"
             )
-        if not full.split.is_resolved():
-            raise ValueError(
-                "options.split has no dates; call "
-                "mtg.train_validation_dates(ds.time, options) before "
-                "building the standardized dataset"
-            )
-        split_selection = full.split.train_selection()
-        available = pd.DatetimeIndex(
-            pd.to_datetime(np.asarray(ds["time"].values))
-        ).normalize()
-        chosen = pd.DatetimeIndex(split_selection).normalize()
-        missing_dates = chosen.difference(available)
-        if len(missing_dates) > 0:
-            sample = ", ".join(str(d.date()) for d in missing_dates[:3])
-            raise ValueError(
-                "options.split is inconsistent with ds: "
-                f"{len(missing_dates)} training date(s) are not in the "
-                f"dataset time coordinate (e.g. {sample}). Re-run "
-                "mtg.train_validation_dates on this dataset's ds.time."
-            )
-        if train_dates is None:
-            train_dates = split_selection
+        if mode == "train":
+            if not full.split.is_resolved():
+                raise ValueError(
+                    "options.split has no dates; call "
+                    "mtg.train_validation_dates(ds.time, options) before "
+                    "building the standardized dataset"
+                )
+            split_selection = full.split.train_selection()
+            available = pd.DatetimeIndex(
+                pd.to_datetime(np.asarray(ds["time"].values))
+            ).normalize()
+            chosen = pd.DatetimeIndex(split_selection).normalize()
+            missing_dates = chosen.difference(available)
+            if len(missing_dates) > 0:
+                sample = ", ".join(str(d.date()) for d in missing_dates[:3])
+                raise ValueError(
+                    "options.split is inconsistent with ds: "
+                    f"{len(missing_dates)} training date(s) are not in the "
+                    f"dataset time coordinate (e.g. {sample}). Re-run "
+                    "mtg.train_validation_dates on this dataset's ds.time."
+                )
+            if train_dates is None:
+                train_dates = split_selection
         if gridder is None:
             gridder = full.gridder
         if verbose is None:
@@ -590,26 +747,47 @@ def build_standardized_lazy(
             processed["full_target"].where(processed["full_target"] > 0)
         )
 
-    shifted_missing = processed[missing_flag].roll(
-        time=-missing_flag_shift,
-        roll_coords=False,
-    )
-    processed["masked_target"] = processed["full_target"].where(
-        shifted_missing != 0
-    )
-    processed["true_missing_flag"] = (processed[missing_flag] == 1).astype(
-        "int8"
-    )
     processed["land_flag"] = (processed[land_flag] == 1).astype("int8")
-    processed["valid_masked_target_flag"] = processed[
-        "masked_target"
-    ].notnull().astype("int8")
-    processed["synthetic_missing_flag"] = (
-        (shifted_missing == 0)
-        & (processed["land_flag"] == 0)
-        & (processed["true_missing_flag"] == 0)
-        & processed["full_target"].notnull()
-    ).astype("int8")
+    if mode == "train":
+        # Self-supervised training: punch temporally-shifted synthetic gaps into
+        # the observed data. The hidden pixels become estimate_flag=1 (their true
+        # value is known and supplies the learning signal); real clouds become
+        # unavailable_flag=1.
+        shifted_missing = processed[missing_flag].roll(
+            time=-missing_flag_shift,
+            roll_coords=False,
+        )
+        processed["observed_target"] = processed["full_target"].where(
+            shifted_missing != 0
+        )
+        processed["unavailable_flag"] = (processed[missing_flag] == 1).astype(
+            "int8"
+        )
+        processed["observed_flag"] = processed[
+            "observed_target"
+        ].notnull().astype("int8")
+        processed["estimate_flag"] = (
+            (shifted_missing == 0)
+            & (processed["land_flag"] == 0)
+            & (processed["unavailable_flag"] == 0)
+            & processed["full_target"].notnull()
+        ).astype("int8")
+    else:
+        # Gap-filling: no synthetic clouds. The observed target is the real
+        # observed data (missing values are already NaN and become 0 later). Real
+        # clouds/NaNs over ocean are exactly the pixels the model should fill, so
+        # they become estimate_flag=1; nothing is unavailable at inference time.
+        processed["observed_target"] = processed["full_target"]
+        processed["observed_flag"] = processed[
+            "full_target"
+        ].notnull().astype("int8")
+        processed["estimate_flag"] = (
+            (processed["observed_flag"] == 0)
+            & (processed["land_flag"] == 0)
+        ).astype("int8")
+        processed["unavailable_flag"] = xr.zeros_like(
+            processed["land_flag"]
+        )
 
     day_of_year = processed.time.dt.dayofyear
     spatial_template = xr.ones_like(
@@ -632,12 +810,12 @@ def build_standardized_lazy(
                 xr.ones_like(day_of_year).astype("float32") * with_geo[name]
             ).transpose("time", "lat", "lon")
 
-    standardizable_vars = features + ["full_target", "masked_target"]
+    standardizable_vars = features + ["full_target", "observed_target"]
     for lag in range(1, n_temporal_lags + 1):
-        previous = f"masked_target_m{lag}"
-        following = f"masked_target_p{lag}"
-        processed[previous] = processed["masked_target"].shift(time=lag)
-        processed[following] = processed["masked_target"].shift(time=-lag)
+        previous = f"observed_target_m{lag}"
+        following = f"observed_target_p{lag}"
+        processed[previous] = processed["observed_target"].shift(time=lag)
+        processed[following] = processed["observed_target"].shift(time=-lag)
         standardizable_vars.extend([previous, following])
 
     if std_vars_supplied:
@@ -652,7 +830,20 @@ def build_standardized_lazy(
 
     means = {name: 0.0 for name in standardizable_vars}
     standard_deviations = {name: 1.0 for name in standardizable_vars}
-    if std_vars:
+    if mode == "gapfill" and options is not None and options.standardization:
+        # Reuse the standardization recorded at training time so gap-fill inputs
+        # match the trained model exactly; never recompute from the data.
+        saved = options.standardization
+        std_vars = [
+            name
+            for name in standardizable_vars
+            if saved.get(name, {}).get("applied")
+        ]
+        for name in standardizable_vars:
+            if name in saved:
+                means[name] = float(saved[name].get("mean", 0.0))
+                standard_deviations[name] = float(saved[name].get("std", 1.0))
+    elif std_vars:
         stats_source = processed[std_vars]
         if train_dates is not None:
             stats_source = stats_source.sel(time=train_dates)
@@ -679,9 +870,9 @@ def build_standardized_lazy(
         output_vars.extend(["x_geo", "y_geo", "z_geo"])
     output_vars.extend(
         [
-            "synthetic_missing_flag",
-            "true_missing_flag",
-            "valid_masked_target_flag",
+            "estimate_flag",
+            "unavailable_flag",
+            "observed_flag",
             "land_flag",
         ]
     )
@@ -695,7 +886,7 @@ def build_standardized_lazy(
         for name in standardizable_vars
     }
 
-    if options is not None:
+    if options is not None and mode == "train":
         input_names = [name for name in output_vars if name != "full_target"]
         options.target = "full_target"
         options.lat_bounds = (

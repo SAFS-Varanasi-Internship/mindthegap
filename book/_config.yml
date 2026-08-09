@@ -2,7 +2,7 @@
 # Learn more at https://jupyterbook.org/customize/config.html
 
 title: UNet gap-filling
-author: Yifei Hang (original) and adapted by OHW25 and GeoSmart24
+author: Yifei Hang, Eli Holmes, Troy Russo, Kaira Nair
 logo: logo.jpg
 
 # Force re-execution of notebooks on each build.
@@ -21,7 +21,7 @@ bibtex_bibfiles:
 
 # Information about where the book exists on the web
 repository:
-  url: https://github.com/oceanhackweek/ohw25_proj_gap  # 🔑 full repo URL
+  url: https://github.com/SAFS-Varanasi-Internship/mindthegap  # 🔑 full repo URL
   path_to_book: "book"   # path from repo root to your book (e.g., "book")
   branch: main      # branch where source files live
 

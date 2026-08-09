@@ -243,6 +243,12 @@ class DataOptions:
 
     Sections are empty until populated by the data-preparation pipeline; use
     :meth:`is_resolved` to check whether it has been populated.
+
+    ``data_source`` records how the raw dataset was obtained: the exact
+    ``demo_data(...)`` call when :func:`mindthegap.demo_data` was used, or the
+    default ``"user manual"`` when the user loaded the data with their own
+    script. It is carried into the saved model-bundle metadata and printed by
+    :func:`mindthegap.load_model_bundle`.
     """
 
     source: Optional[str] = None
@@ -268,6 +274,7 @@ class DataOptions:
     available_period: Optional[str] = None
     training_period: Optional[str] = None
     region_name: Optional[str] = None
+    data_source: str = "user manual"
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -298,6 +305,7 @@ class DataOptions:
         self.source = dataset_info.get("name")
         self.product_id = dataset_info.get("product_id")
         self.available_period = dataset_info.get("available_period")
+        self.data_source = dataset_info.get("data_source", "user manual")
         if "region_name" in dataset_info:
             self.region_name = dataset_info["region_name"]
 

@@ -148,6 +148,68 @@ def test_metadata_preserves_dataset_loader_details(tmp_path):
     )
 
 
+def test_metadata_records_data_source_from_argument(tmp_path):
+    bundle_path = tmp_path / "bundle"
+    _create_metadata_with_data_source(
+        bundle_path,
+        data_source="demo_data(dataset='synthetic', days=12)",
+    )
+
+    metadata = yaml.safe_load(
+        (bundle_path / "model_metadata.yaml").read_text()
+    )
+    assert (
+        metadata["dataset"]["data_source"]
+        == "demo_data(dataset='synthetic', days=12)"
+    )
+
+
+def test_metadata_defaults_data_source_to_user_manual(tmp_path):
+    bundle_path = tmp_path / "bundle"
+    _create_metadata(bundle_path)
+
+    metadata = yaml.safe_load(
+        (bundle_path / "model_metadata.yaml").read_text()
+    )
+    assert metadata["dataset"]["data_source"] == "user manual"
+
+
+def test_load_model_bundle_reports_data_source(tmp_path, capsys):
+    bundle_path = tmp_path / "bundle"
+    _create_metadata_with_data_source(
+        bundle_path,
+        data_source="demo_data(dataset='synthetic', days=12)",
+    )
+    save_model_bundle(_model(), bundle_path)
+
+    capsys.readouterr()
+    load_model_bundle(bundle_path)
+    out = capsys.readouterr().out
+    assert "demo_data(dataset='synthetic', days=12)" in out
+
+
+def _create_metadata_with_data_source(bundle_path, *, data_source):
+    metadata = _metadata()
+    return create_model_bundle_metadata(
+        bundle_path,
+        model_name="test-gap-model",
+        dataset_name=metadata["dataset"]["name"],
+        product_id=metadata["dataset"]["product_id"],
+        region=metadata["dataset"]["region"],
+        training_period=metadata["dataset"]["training_period"],
+        input_names=[item["name"] for item in metadata["inputs"]],
+        target_name=metadata["target"]["name"],
+        target_units=metadata["target"]["units"],
+        expected_input_shape=metadata["preprocessing"]["expected_input_shape"],
+        transforms=metadata["preprocessing"]["transforms"],
+        standardization=metadata["preprocessing"]["standardization"],
+        missing_value_handling=metadata["preprocessing"][
+            "missing_value_handling"
+        ],
+        data_source=data_source,
+    )
+
+
 def test_bundle_overwrite_is_explicit(tmp_path):
     bundle_path = tmp_path / "bundle"
     _create_metadata(bundle_path)
@@ -173,7 +235,7 @@ def test_metadata_includes_resolved_options(tmp_path):
 
     options = Options.default()
     options.data.target = "full_target"
-    options.data.input_names = ["masked_target"]
+    options.data.input_names = ["observed_target"]
     bundle_path = tmp_path / "bundle"
 
     _create_metadata(bundle_path)

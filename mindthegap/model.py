@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import numpy as np
+import xarray as xr
 
 
 def make_tf_gen(batcher, x_vars, label="full_target"):
@@ -347,3 +348,97 @@ def fit_model(
             f"final train_loss: {history.history['loss'][-1]:.6f}"
         )
     return history
+
+
+def gapfill_std(ds_std, model, metadata, *, time=None, verbose=None):
+    """Run a trained model on an already-standardized dataset (low level).
+
+    ``ds_std`` must be the output of
+    :func:`mindthegap.build_standardized_lazy` in ``mode="gapfill"`` for the
+    same model: it already carries the inference channels (real observations,
+    ``estimate_flag`` over the cloud/NaN pixels to fill, ``unavailable_flag`` all
+    zero) so **no relabelling is done here**. Channels are stacked in the exact
+    order recorded in ``metadata["inputs"]`` and the model is run one time frame
+    at a time.
+
+    This is a **low-level** function: it returns the model prediction exactly as
+    produced, in the model's standardized output space. It does **not** transform
+    ``gapfilled_target`` in any way — it does not undo the target
+    standardization (mean/std) and does not undo any log transform. Recovering
+    the original units and removing the training standardization is the job of
+    the higher-level ``gapfill(ds)`` (a later function), which will return
+    ``gapfilled_<target>`` in the original units.
+
+    Parameters
+    ----------
+    ds_std : xarray.Dataset
+        Standardized gap-fill dataset (from ``build_standardized_lazy(...,
+        mode="gapfill")``).
+    model : keras.Model
+        Loaded model, e.g. from :func:`mindthegap.load_model_bundle`.
+    metadata : dict
+        Bundle metadata (used only for the input channel order).
+    time : optional
+        A single time label, a list/array of labels, or a slice selecting which
+        frames to gap-fill. Defaults to every time step in ``ds_std``.
+    verbose : bool, optional
+        Print progress. Defaults to quiet.
+
+    Returns
+    -------
+    xarray.Dataset
+        A dataset with a single ``gapfilled_target`` variable of dimensions
+        ``(time, lat, lon)`` (a ``time`` dimension of length one is retained),
+        holding the raw model output in standardized space (no unstandardizing
+        or de-logging applied).
+    """
+    inputs = metadata.get("inputs")
+    if not inputs:
+        raise ValueError("bundle metadata does not define input channels")
+    names = [item["name"] for item in inputs]
+    missing = [name for name in names if name not in ds_std]
+    if missing:
+        raise KeyError(
+            "ds_std is missing model input channels: " + ", ".join(missing)
+        )
+
+    selected = ds_std if time is None else ds_std.sel(time=time)
+    if "time" not in selected.dims:
+        selected = selected.expand_dims("time")
+
+    frames = []
+    times = selected["time"].values
+    for index, stamp in enumerate(times):
+        frame = selected.isel(time=index)
+        values = np.stack(
+            [np.nan_to_num(frame[name].values, nan=0.0) for name in names],
+            axis=-1,
+        ).astype("float32")
+        prediction = np.asarray(
+            model.predict(values[np.newaxis, ...], verbose=0)
+        )
+        if prediction.ndim != 4 or prediction.shape[0] != 1:
+            raise ValueError(
+                "model prediction must have shape (1, lat, lon, channels)"
+            )
+        # Return the raw model prediction as-is; do not unstandardize or de-log.
+        frames.append(prediction[0, ..., 0])
+        if verbose:
+            print(f"gap-filled frame {index + 1}/{len(times)}: {stamp}")
+
+    stacked = np.stack(frames, axis=0)
+    gapfilled = xr.DataArray(
+        stacked,
+        dims=("time", "lat", "lon"),
+        coords={
+            "time": selected["time"],
+            "lat": selected["lat"],
+            "lon": selected["lon"],
+        },
+        name="gapfilled_target",
+        attrs={
+            "long_name": "gap-filled target (standardized model output)",
+            "standardized": True,
+        },
+    )
+    return gapfilled.to_dataset()
