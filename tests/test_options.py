@@ -100,7 +100,7 @@ def test_build_standardized_lazy_populates_data_options():
 
     assert options.data.is_resolved()
     assert options.data.target == "full_target"
-    assert "masked_target" in options.data.input_names
+    assert "observed_target" in options.data.input_names
     assert "full_target" not in options.data.input_names
     assert options.data.transforms["target"] == "natural logarithm"
     assert set(options.data.standardization) == set(stats)

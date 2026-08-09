@@ -157,6 +157,7 @@ def create_model_bundle_metadata(
     transforms,
     standardization,
     missing_value_handling,
+    data_source=None,
     model_version="1.0",
     limitations=None,
     options=None,
@@ -172,11 +173,16 @@ def create_model_bundle_metadata(
     bundle_path.mkdir(parents=True, exist_ok=True)
 
     dataset_section = _native(deepcopy(dataset_metadata or {}))
+    resolved_data_source = data_source
+    if resolved_data_source is None and options is not None:
+        data_options = getattr(options, "data", options)
+        resolved_data_source = getattr(data_options, "data_source", None)
     supplied_dataset_values = {
         "name": dataset_name,
         "product_id": product_id,
         "region": region,
         "training_period": training_period,
+        "data_source": resolved_data_source,
     }
     dataset_section.update(
         {
@@ -185,6 +191,7 @@ def create_model_bundle_metadata(
             if value is not None
         }
     )
+    dataset_section.setdefault("data_source", "user manual")
     missing_dataset_values = [
         key
         for key in ("name", "product_id", "region", "training_period")
@@ -295,4 +302,6 @@ def load_model_bundle(path, compile=False):
     ) as file:
         metadata = yaml.safe_load(file)
     _validate_metadata(metadata)
+    data_source = metadata.get("dataset", {}).get("data_source", "user manual")
+    print(f"Data loaded for this model with: {data_source}")
     return model, metadata

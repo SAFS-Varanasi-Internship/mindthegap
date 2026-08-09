@@ -32,11 +32,11 @@ def _dataset():
             "channel_a": (("time", "lat", "lon"), np.full(shape, 1.0)),
             "full_target": (("time", "lat", "lon"), np.full(shape, 1.0)),
             "land_flag": (("time", "lat", "lon"), np.zeros(shape)),
-            "true_missing_flag": (
+            "unavailable_flag": (
                 ("time", "lat", "lon"),
                 np.zeros(shape),
             ),
-            "synthetic_missing_flag": (
+            "estimate_flag": (
                 ("time", "lat", "lon"),
                 np.zeros(shape),
             ),
@@ -82,8 +82,8 @@ def test_predict_frame_uses_metadata_order_and_unstandardizes():
 def test_observed_and_flag_frames():
     dataset = _dataset()
     dataset["land_flag"][0, 0, 0] = 1
-    dataset["synthetic_missing_flag"][0, 0, 1] = 1
-    dataset["true_missing_flag"][0, 0, 2] = 1
+    dataset["estimate_flag"][0, 0, 1] = 1
+    dataset["unavailable_flag"][0, 0, 2] = 1
 
     observed = viz.observed_frame(
         dataset,

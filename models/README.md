@@ -11,9 +11,9 @@ my-model-bundle/
 ```
 
 - `model.keras` contains the complete Keras architecture and trained weights.
-- `model_metadata.yaml` records the dataset, ordered input channels, target,
-  preprocessing, standardization, geographic and temporal scope, and source
-  code version.
+- `model_metadata.yaml` records the dataset, how the data were loaded
+  (`data_source`), ordered input channels, target, preprocessing,
+  standardization, geographic and temporal scope, and source code version.
 - `README.md` is a model card. Hugging Face displays it on the model's page.
 
 Do not add training datasets, checkpoints, logs, or credentials to a bundle.
@@ -64,14 +64,14 @@ metadata_path = mtg.create_model_bundle_metadata(
     },
     training_period="2018-01-01 to 2020-12-31",
     input_names=[
-        "masked_target",
-        "masked_target_m1",
-        "masked_target_p1",
+        "observed_target",
+        "observed_target_m1",
+        "observed_target_p1",
         "day_sin",
         "day_cos",
-        "synthetic_missing_flag",
-        "true_missing_flag",
-        "valid_masked_target_flag",
+        "estimate_flag",
+        "unavailable_flag",
+        "observed_flag",
         "land_flag",
     ],
     target_name="CHL",
@@ -99,6 +99,12 @@ metadata_path = mtg.create_model_bundle_metadata(
 )
 print(metadata_path)
 ```
+
+`create_model_bundle_metadata()` also records how the underlying data were
+obtained in `dataset.data_source`. Pass `options=options` (or an explicit
+`data_source="..."`) so this is captured: when the data came from
+`mtg.demo_data(...)` it stores the exact reproducing call, and when a user
+loaded the data with their own script it defaults to `"user manual"`.
 
 Open `models/arabian-sea-chlorophyll-unet/model_metadata.yaml` and check every
 field, especially the dataset, region, dates, input order, transforms, and

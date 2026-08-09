@@ -109,16 +109,16 @@ def flag_frame(
     dataset,
     date,
     land_flag="land_flag",
-    missing_flag="true_missing_flag",
-    synthetic_flag="synthetic_missing_flag",
+    missing_flag="unavailable_flag",
+    estimate_flag="estimate_flag",
 ):
     """Build categorical map values for land, held-out, observed, and missing."""
     land = _frame(dataset, land_flag, date).values == 1
     missing = _frame(dataset, missing_flag, date).values == 1
-    synthetic = _frame(dataset, synthetic_flag, date).values == 1
+    estimate = _frame(dataset, estimate_flag, date).values == 1
 
     flags = np.full(land.shape, 2, dtype="int8")
-    flags[synthetic] = 1
+    flags[estimate] = 1
     flags[missing] = 3
     flags[land] = 0
     return xr.DataArray(

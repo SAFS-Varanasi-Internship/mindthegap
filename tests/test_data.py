@@ -16,6 +16,11 @@ def test_demo_data_has_requested_shape_and_flags():
     assert metadata["dataset"]["name"] == "Synthetic"
     assert metadata["dataset"]["product_id"] == "mindthegap-synthetic"
     assert metadata["dataset"]["loader"] == "synthetic"
+    assert (
+        metadata["dataset"]["data_source"]
+        == "demo_data(dataset='synthetic', days=10, lat_size=8, "
+        "lon_size=12, seed=7)"
+    )
     assert metadata["target"] == {"name": "chlor_a", "units": "mg m-3"}
     assert metadata["variables"]["missing_flag"] == "cloud_flag"
 
