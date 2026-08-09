@@ -558,6 +558,7 @@ def build_standardized_lazy(
     output_chunks=None,
     add_geo=None,
     gridder=None,
+    mode="train",
     verbose=None,
 ):
     """Build lazy model inputs, targets, and standardization statistics.
@@ -610,6 +611,23 @@ def build_standardized_lazy(
     land                      0             0              0              1
     ==================  ============  ============  ================  =========
 
+    Modes
+    -----
+    ``mode="train"`` (default) produces the self-supervised training inputs
+    described above: temporally-shifted synthetic gaps are punched into the
+    observed data (``estimate_flag=1`` there, with the true value retained as
+    the learning target) and real clouds become ``unavailable_flag=1``.
+
+    ``mode="gapfill"`` produces inference inputs for gap-filling. No synthetic
+    clouds are created: ``observed_target`` is the real observed data,
+    ``observed_flag`` marks the real observations, real cloud/NaN ocean pixels
+    become ``estimate_flag=1`` (the pixels to fill), and ``unavailable_flag`` is
+    0 everywhere. Every other channel (temporal lags, seasonal, geo, land) is
+    computed identically to training so the inputs match the trained model. In
+    this mode the split is not required and, when a resolved
+    :class:`DataOptions` is supplied, the recorded standardization statistics
+    are reused (``train_dates`` is ignored) so inputs match training exactly.
+
     Returns ``(output, stats)``. The recommended call is
     ``build_standardized_lazy(ds, options)`` where ``options`` is the full
     :class:`Options` object: the variable names/features/``log_target`` /
@@ -618,12 +636,18 @@ def build_standardized_lazy(
     ``options.split.train_selection()`` (do not pass ``train_dates`` yourself).
     It raises with instructions if the split has not been chosen or selects
     dates absent from ``ds``. Passing a :class:`DataOptions` as ``options`` is
-    also supported for advanced use. ``options.data`` is populated in place with
-    the canonical resolved data configuration (bounds, input channel
-    names/order, transforms, standardization statistics, and target mean/std) so
-    downstream functions and the saved model bundle can reproduce these inputs.
+    also supported for advanced use. In ``mode="train"`` ``options.data`` is
+    populated in place with the canonical resolved data configuration (bounds,
+    input channel names/order, transforms, standardization statistics, and
+    target mean/std) so downstream functions and the saved model bundle can
+    reproduce these inputs; ``mode="gapfill"`` leaves ``options`` untouched.
     """
     from .options import Options as _Options
+
+    if mode not in ("train", "gapfill"):
+        raise ValueError(
+            f"mode must be 'train' or 'gapfill', got {mode!r}"
+        )
 
     # Accept the full Options object: pull the data/gridder/split sections from
     # it, take train_dates from the resolved split, and validate consistency.
@@ -634,28 +658,29 @@ def build_standardized_lazy(
                 "options.data is not configured; call "
                 "options.set_data_config(data=ds, metadata=...) first"
             )
-        if not full.split.is_resolved():
-            raise ValueError(
-                "options.split has no dates; call "
-                "mtg.train_validation_dates(ds.time, options) before "
-                "building the standardized dataset"
-            )
-        split_selection = full.split.train_selection()
-        available = pd.DatetimeIndex(
-            pd.to_datetime(np.asarray(ds["time"].values))
-        ).normalize()
-        chosen = pd.DatetimeIndex(split_selection).normalize()
-        missing_dates = chosen.difference(available)
-        if len(missing_dates) > 0:
-            sample = ", ".join(str(d.date()) for d in missing_dates[:3])
-            raise ValueError(
-                "options.split is inconsistent with ds: "
-                f"{len(missing_dates)} training date(s) are not in the "
-                f"dataset time coordinate (e.g. {sample}). Re-run "
-                "mtg.train_validation_dates on this dataset's ds.time."
-            )
-        if train_dates is None:
-            train_dates = split_selection
+        if mode == "train":
+            if not full.split.is_resolved():
+                raise ValueError(
+                    "options.split has no dates; call "
+                    "mtg.train_validation_dates(ds.time, options) before "
+                    "building the standardized dataset"
+                )
+            split_selection = full.split.train_selection()
+            available = pd.DatetimeIndex(
+                pd.to_datetime(np.asarray(ds["time"].values))
+            ).normalize()
+            chosen = pd.DatetimeIndex(split_selection).normalize()
+            missing_dates = chosen.difference(available)
+            if len(missing_dates) > 0:
+                sample = ", ".join(str(d.date()) for d in missing_dates[:3])
+                raise ValueError(
+                    "options.split is inconsistent with ds: "
+                    f"{len(missing_dates)} training date(s) are not in the "
+                    f"dataset time coordinate (e.g. {sample}). Re-run "
+                    "mtg.train_validation_dates on this dataset's ds.time."
+                )
+            if train_dates is None:
+                train_dates = split_selection
         if gridder is None:
             gridder = full.gridder
         if verbose is None:
@@ -722,26 +747,47 @@ def build_standardized_lazy(
             processed["full_target"].where(processed["full_target"] > 0)
         )
 
-    shifted_missing = processed[missing_flag].roll(
-        time=-missing_flag_shift,
-        roll_coords=False,
-    )
-    processed["observed_target"] = processed["full_target"].where(
-        shifted_missing != 0
-    )
-    processed["unavailable_flag"] = (processed[missing_flag] == 1).astype(
-        "int8"
-    )
     processed["land_flag"] = (processed[land_flag] == 1).astype("int8")
-    processed["observed_flag"] = processed[
-        "observed_target"
-    ].notnull().astype("int8")
-    processed["estimate_flag"] = (
-        (shifted_missing == 0)
-        & (processed["land_flag"] == 0)
-        & (processed["unavailable_flag"] == 0)
-        & processed["full_target"].notnull()
-    ).astype("int8")
+    if mode == "train":
+        # Self-supervised training: punch temporally-shifted synthetic gaps into
+        # the observed data. The hidden pixels become estimate_flag=1 (their true
+        # value is known and supplies the learning signal); real clouds become
+        # unavailable_flag=1.
+        shifted_missing = processed[missing_flag].roll(
+            time=-missing_flag_shift,
+            roll_coords=False,
+        )
+        processed["observed_target"] = processed["full_target"].where(
+            shifted_missing != 0
+        )
+        processed["unavailable_flag"] = (processed[missing_flag] == 1).astype(
+            "int8"
+        )
+        processed["observed_flag"] = processed[
+            "observed_target"
+        ].notnull().astype("int8")
+        processed["estimate_flag"] = (
+            (shifted_missing == 0)
+            & (processed["land_flag"] == 0)
+            & (processed["unavailable_flag"] == 0)
+            & processed["full_target"].notnull()
+        ).astype("int8")
+    else:
+        # Gap-filling: no synthetic clouds. The observed target is the real
+        # observed data (missing values are already NaN and become 0 later). Real
+        # clouds/NaNs over ocean are exactly the pixels the model should fill, so
+        # they become estimate_flag=1; nothing is unavailable at inference time.
+        processed["observed_target"] = processed["full_target"]
+        processed["observed_flag"] = processed[
+            "full_target"
+        ].notnull().astype("int8")
+        processed["estimate_flag"] = (
+            (processed["observed_flag"] == 0)
+            & (processed["land_flag"] == 0)
+        ).astype("int8")
+        processed["unavailable_flag"] = xr.zeros_like(
+            processed["land_flag"]
+        )
 
     day_of_year = processed.time.dt.dayofyear
     spatial_template = xr.ones_like(
@@ -784,7 +830,20 @@ def build_standardized_lazy(
 
     means = {name: 0.0 for name in standardizable_vars}
     standard_deviations = {name: 1.0 for name in standardizable_vars}
-    if std_vars:
+    if mode == "gapfill" and options is not None and options.standardization:
+        # Reuse the standardization recorded at training time so gap-fill inputs
+        # match the trained model exactly; never recompute from the data.
+        saved = options.standardization
+        std_vars = [
+            name
+            for name in standardizable_vars
+            if saved.get(name, {}).get("applied")
+        ]
+        for name in standardizable_vars:
+            if name in saved:
+                means[name] = float(saved[name].get("mean", 0.0))
+                standard_deviations[name] = float(saved[name].get("std", 1.0))
+    elif std_vars:
         stats_source = processed[std_vars]
         if train_dates is not None:
             stats_source = stats_source.sel(time=train_dates)
@@ -827,7 +886,7 @@ def build_standardized_lazy(
         for name in standardizable_vars
     }
 
-    if options is not None:
+    if options is not None and mode == "train":
         input_names = [name for name in output_vars if name != "full_target"]
         options.target = "full_target"
         options.lat_bounds = (

@@ -118,3 +118,37 @@ def test_individual_panels_and_composite_share_prediction():
     assert np.all(axes[1, 0].images[0].get_array() == 2.0)
     assert np.all(axes[1, 1].images[0].get_array() == 3.0)
     plt.close(figure)
+
+
+def test_land_is_overlaid_without_masking_data():
+    dataset = _dataset()
+    dataset["land_flag"][0, 0, 0] = 1
+
+    image = viz.plot_observed(
+        dataset,
+        _metadata(),
+        "2020-09-08",
+        colorbar=False,
+    )
+    ax = image.axes
+    # A separate land overlay image is added on top of the data image.
+    assert len(ax.images) == 2
+    # The data image itself is untouched (no pixels set to NaN for land/clouds),
+    # so observed values stay colored and gaps remain the white background.
+    assert np.all(image.get_array() == 5.0)
+    assert not np.ma.is_masked(image.get_array())
+    plt.close(ax.figure)
+
+
+def test_no_land_overlay_when_no_land():
+    dataset = _dataset()  # land_flag all zero
+
+    image = viz.plot_observed(
+        dataset,
+        _metadata(),
+        "2020-09-08",
+        colorbar=False,
+    )
+    ax = image.axes
+    assert len(ax.images) == 1
+    plt.close(ax.figure)

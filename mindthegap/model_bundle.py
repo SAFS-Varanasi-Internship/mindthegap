@@ -305,3 +305,25 @@ def load_model_bundle(path, compile=False):
     data_source = metadata.get("dataset", {}).get("data_source", "user manual")
     print(f"Data loaded for this model with: {data_source}")
     return model, metadata
+
+
+def options_from_bundle(metadata):
+    """Reconstruct an :class:`~mindthegap.Options` from bundle metadata.
+
+    The saved bundle records the resolved pipeline configuration under
+    ``metadata["options"]``. This rebuilds the :class:`Options` object so the
+    identical data configuration (variable names, transforms, temporal lags,
+    standardization, channel order) can be replayed through
+    :func:`mindthegap.build_standardized_lazy` in ``mode="gapfill"`` when
+    gap-filling with the loaded model. Raises if the metadata does not include a
+    saved options section.
+    """
+    from .options import Options
+
+    saved = metadata.get("options")
+    if not saved:
+        raise ValueError(
+            "bundle metadata has no 'options' section; cannot reconstruct "
+            "the data configuration used to train this model"
+        )
+    return Options.from_dict(saved)
