@@ -696,6 +696,12 @@ def prepare_model_data(
       steps and those pixels are hidden. This borrows a real cloud pattern from
       ``missing_flag_shift`` days ahead.
 
+    Regardless of how the synthetic clouds are generated, each pixel ends up
+    with at most one cloud type: synthetic clouds are only applied to real
+    ocean observations, so a pixel that is already land or under a real cloud
+    (``unavailable_flag=1``) keeps that state and ``estimate_flag`` never
+    overlaps ``unavailable_flag`` or ``land_flag``.
+
     ``mode="gapfill"`` produces inference inputs for gap-filling. No synthetic
     clouds are created: ``observed_target`` is the real observed data,
     ``observed_flag`` marks the real observations, real cloud/NaN ocean pixels
@@ -847,7 +853,10 @@ def prepare_model_data(
             "int8"
         )
         # Pixels that are real ocean observations and therefore eligible to be
-        # hidden by a synthetic cloud (there must be a true value to learn from).
+        # hidden by a synthetic cloud: there must be a true value to learn from,
+        # and the pixel must not already carry another cloud type. Applying this
+        # single mask to the synthetic clouds below guarantees each pixel has at
+        # most one cloud flag (a real cloud always wins over a synthetic one).
         eligible = (
             (processed[missing_flag] == 0)
             & (processed["land_flag"] == 0)
@@ -874,7 +883,7 @@ def prepare_model_data(
                     "lon": processed["lon"],
                 },
             )
-            estimate = eligible & synthetic_cloud
+            estimate = synthetic_cloud
         else:
             # Historical behaviour: borrow the real cloud pattern from
             # ``missing_flag_shift`` time steps ahead and hide those pixels.
@@ -882,7 +891,14 @@ def prepare_model_data(
                 time=-missing_flag_shift,
                 roll_coords=False,
             )
-            estimate = eligible & (shifted_missing == 0)
+            estimate = shifted_missing == 0
+        # Each pixel gets at most one cloud type. However the synthetic clouds
+        # were created above, restrict them to pixels that are real ocean
+        # observations (a known truth to learn from): drop any that fall on
+        # land, on a real cloud (unavailable_flag), or on an already-missing
+        # value. This guarantees estimate_flag and unavailable_flag never
+        # overlap -- a pixel under a real cloud stays real, not synthetic.
+        estimate = estimate & eligible
         processed["estimate_flag"] = estimate.astype("int8")
         processed["observed_target"] = processed["full_target"].where(
             ~estimate

@@ -251,6 +251,40 @@ def test_prepare_model_data_shift_cloud_mode_uses_future_clouds():
     assert not (estimate & land).any()
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"cloud_mode": "synthetic", "cloud_seed": 1, "coverage": 0.5},
+        {"cloud_mode": "shift", "missing_flag_shift": 5},
+    ],
+)
+def test_prepare_model_data_flags_are_mutually_exclusive(kwargs):
+    # A pixel with both a real cloud and a synthetic cloud must count as real
+    # only: estimate_flag never overlaps the other cloud/state flags. (land and
+    # unavailable can co-occur in the raw demo data -- a real cloud reported
+    # over land -- which is unrelated to synthetic-cloud creation.)
+    ds, _ = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+
+    standardized, _ = prepare_model_data(
+        ds,
+        target_variable="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        std_vars=[],
+        **kwargs,
+    )
+
+    estimate = standardized["estimate_flag"].values == 1
+    unavailable = standardized["unavailable_flag"].values == 1
+    land = standardized["land_flag"].values == 1
+    observed = standardized["observed_flag"].values == 1
+
+    assert estimate.any()
+    assert not (estimate & unavailable).any()
+    assert not (estimate & land).any()
+    assert not (estimate & observed).any()
+
+
 def test_prepare_model_data_rejects_bad_cloud_mode():
     ds, _ = demo_data(days=12, lat_size=8, lon_size=8)
     with pytest.raises(ValueError, match="cloud_mode"):
