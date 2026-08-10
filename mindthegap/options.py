@@ -55,7 +55,15 @@ def _coerce_pair(value, name):
 
 @dataclass
 class GridderOptions:
-    """How the prepared dataset is split into spatial/temporal patches."""
+    """How the prepared dataset is split into spatial/temporal patches.
+
+    ``tile_size`` may be an int, a ``(lat, lon)`` pair, or the string
+    ``"full"``. Use ``"full"`` to train on the entire field as a single tile:
+    :meth:`resolve_for` then sets ``tile_size`` to the full ``(lat, lon)`` size
+    of the dataset (which is already a multiple of ``tile_multiple`` because the
+    pipeline crops the field with ``crop_to_multiple`` before standardizing),
+    ignoring ``tile_upper_limit``.
+    """
 
     method: str = "xbatcher"
     tile_size: tuple = (64, 64)
@@ -66,7 +74,8 @@ class GridderOptions:
     tile_multiple: int = 8
 
     def __post_init__(self):
-        self.tile_size = _coerce_pair(self.tile_size, "tile_size")
+        if not self._is_full(self.tile_size):
+            self.tile_size = _coerce_pair(self.tile_size, "tile_size")
         self.overlap = _coerce_pair(self.overlap, "overlap")
         if self.method != "xbatcher":
             raise ValueError(
@@ -75,9 +84,23 @@ class GridderOptions:
             )
         if self.time_chunk <= 0:
             raise ValueError("time_chunk must be a positive integer")
+
+    @staticmethod
+    def _is_full(value):
+        """Return True when ``value`` requests the full field as one tile."""
+        return isinstance(value, str) and value.lower() == "full"
+
     def _tile_length(self, size, chunk):
-        """Largest tile length that fits the data, chunk, and cap."""
+        """Largest tile length that fits the data, chunk, and cap.
+
+        When the cap (``tile_upper_limit``) and on-disk chunk are both large
+        enough to span the whole dimension, the full dataset length is used so
+        the tile defaults to the entire grid instead of being trimmed down to a
+        multiple of ``tile_multiple``.
+        """
         available = min(size, chunk, self.tile_upper_limit)
+        if available >= size:
+            return size
         aligned = available - available % self.tile_multiple
         if aligned < self.tile_multiple:
             raise ValueError(
@@ -91,6 +114,9 @@ class GridderOptions:
         Tile lengths are inferred from the dataset sizes and on-disk chunks,
         capped by ``tile_upper_limit`` and aligned to ``tile_multiple``. The
         time chunk targets roughly six blocks across the record.
+
+        When ``tile_size`` is ``"full"`` the cap is ignored and the tile spans
+        the entire ``(lat, lon)`` field (a single big tile).
         """
         chunk_sizes = getattr(ds, "chunksizes", {})
 
@@ -98,8 +124,12 @@ class GridderOptions:
             values = chunk_sizes.get(dim, (ds.sizes[dim],))
             return values[0] if values else ds.sizes[dim]
 
-        tile_lat = self._tile_length(ds.sizes["lat"], chunk0("lat"))
-        tile_lon = self._tile_length(ds.sizes["lon"], chunk0("lon"))
+        if self._is_full(self.tile_size):
+            tile_lat = ds.sizes["lat"]
+            tile_lon = ds.sizes["lon"]
+        else:
+            tile_lat = self._tile_length(ds.sizes["lat"], chunk0("lat"))
+            tile_lon = self._tile_length(ds.sizes["lon"], chunk0("lon"))
         time_chunk = min(100, max(1, ds.sizes["time"] // 6))
         return replace(
             self,
@@ -176,13 +206,15 @@ class SplitOptions:
     the split strategy is not configured until the user chooses one.
     ``method`` records how they were produced (``"random"`` or ``"manual"``)
     and also selects the strategy when :func:`mindthegap.train_validation_dates`
-    is called without an explicit ``method``. ``train_fraction`` /
-    ``val_fraction`` (default 80/20 of the sampled dates) size the random
-    split, and ``seed`` (default ``None`` = inherit the global ``options.seed``)
-    makes the random selection reproducible.
+    is called without an explicit ``method``. ``n_days`` optionally caps the
+    number of available dates used to size a random split (default ``None`` uses
+    all dates), while ``train_fraction`` / ``val_fraction`` (default 80/20)
+    divide those dates. ``seed`` (default ``None`` = inherit the global
+    ``options.seed``) makes the random selection reproducible.
     """
 
     method: str = "random"
+    n_days: Optional[int] = None
     train_fraction: float = 0.8
     val_fraction: float = 0.2
     train_dates: list = field(default_factory=list)
@@ -196,6 +228,12 @@ class SplitOptions:
                 f"Unsupported split method {self.method!r}; "
                 "choose 'random' or 'manual'"
             )
+        if self.n_days is not None and (
+            not isinstance(self.n_days, int)
+            or isinstance(self.n_days, bool)
+            or self.n_days <= 0
+        ):
+            raise ValueError("n_days must be a positive integer")
         if not 0 < self.train_fraction < 1:
             raise ValueError("train_fraction must be between 0 and 1")
         if not 0 < self.val_fraction < 1:

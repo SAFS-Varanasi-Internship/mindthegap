@@ -27,6 +27,33 @@ def test_gridder_resolve_caps_and_aligns_tile():
     assert gridder.tile_size == (64, 64)
 
 
+def test_gridder_resolve_large_cap_defaults_to_whole_grid():
+    ds, _ = demo_data(days=30, lat_size=100, lon_size=100, seed=1)
+
+    gridder = GridderOptions(tile_upper_limit=10000).resolve_for(ds)
+
+    assert gridder.tile_size == (100, 100)
+
+
+def test_gridder_resolve_full_uses_whole_field():
+    ds, _ = demo_data(days=30, lat_size=40, lon_size=88, seed=1)
+
+    gridder = GridderOptions(tile_size="full").resolve_for(ds)
+
+    assert gridder.tile_size == (40, 88)
+
+
+def test_gridder_full_survives_serialization_round_trip():
+    ds, _ = demo_data(days=30, lat_size=40, lon_size=88, seed=1)
+    from mindthegap.options import _to_plain
+
+    plain = _to_plain(GridderOptions(tile_size="full"))
+    assert plain["tile_size"] == "full"
+
+    restored = GridderOptions.from_dict(plain)
+    assert restored.resolve_for(ds).tile_size == (40, 88)
+
+
 def test_fit_resolve_scales_batch_size():
     fit = FitOptions(epochs=50, patience=10).resolve_for((128, 128))
     assert fit.batch_size == max(1, min(16, fit.pixel_budget // (128 * 128)))
@@ -38,6 +65,7 @@ def test_split_defaults():
     split = SplitOptions()
 
     assert split.method == "random"
+    assert split.n_days is None
     assert split.train_fraction == 0.8
     assert split.val_fraction == 0.2
     assert split.train_dates == []
@@ -59,6 +87,38 @@ def test_train_validation_dates_random_populates_split():
     assert len(split.train_dates) == 80
     assert len(split.val_dates) == 20
     assert not (set(split.train_dates) & set(split.val_dates))
+
+
+def test_train_validation_dates_random_limits_total_days():
+    ds, metadata = demo_data(days=100, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata)
+
+    train_validation_dates(ds.time, options, n_days=50, seed=7)
+
+    assert options.split.n_days == 50
+    assert len(options.split.train_dates) == 40
+    assert len(options.split.val_dates) == 10
+
+
+def test_train_validation_dates_random_reads_n_days_from_options():
+    ds, metadata = demo_data(days=100, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata)
+    options.split.n_days = 25
+
+    train_validation_dates(ds.time, options, seed=7)
+
+    assert len(options.split.train_dates) == 20
+    assert len(options.split.val_dates) == 5
+
+
+def test_train_validation_dates_caps_n_days_at_available_dates():
+    ds, metadata = demo_data(days=20, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata)
+
+    train_validation_dates(ds.time, options, n_days=100, seed=7)
+
+    assert len(options.split.train_dates) == 16
+    assert len(options.split.val_dates) == 4
 
 
 def test_train_validation_dates_random_is_deterministic():
@@ -113,6 +173,12 @@ def test_train_validation_dates_rejects_unknown_method():
         train_validation_dates(
             ds.time, Options.default(data=ds, metadata=metadata), method="bogus"
         )
+
+
+@pytest.mark.parametrize("n_days", [0, -1, 1.5, True])
+def test_split_rejects_invalid_n_days(n_days):
+    with pytest.raises(ValueError, match="n_days must be a positive integer"):
+        SplitOptions(n_days=n_days)
 
 
 def test_set_config_resolves_gridder_and_fit_not_split():

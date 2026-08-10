@@ -1014,6 +1014,7 @@ def train_validation_dates(
     options,
     *,
     method=None,
+    n_days=None,
     train_fraction=None,
     val_fraction=None,
     n_train=None,
@@ -1035,10 +1036,10 @@ def train_validation_dates(
 
     ``method`` defaults to ``options.split.method``. ``method="random"`` samples
     spaced-out dates for train/validation using ``min_day_difference`` (defaults
-    to ``options.split.min_day_difference``); the counts come from ``n_train`` /
-    ``n_val`` or from ``train_fraction`` / ``val_fraction`` (defaulting to
-    ``options.split.train_fraction`` / ``val_fraction``, i.e. 80/20 of the
-    record). ``method="manual"`` selects dates falling in ``train_slice`` and
+    to ``options.split.min_day_difference``). The counts come from ``n_train`` /
+    ``n_val`` when supplied; otherwise ``train_fraction`` / ``val_fraction``
+    divide up to ``n_days`` available dates (all default to ``options.split``).
+    ``method="manual"`` selects dates falling in ``train_slice`` and
     ``val_slice`` (``slice("1997-01-01", "2000-01-01")``); it raises if a slice
     selects no dates. ``seed`` overrides the resolved default.
     """
@@ -1066,7 +1067,18 @@ def train_validation_dates(
         val_fraction = (
             val_fraction if val_fraction is not None else split.val_fraction
         )
-        total = len(dates)
+        n_days = n_days if n_days is not None else split.n_days
+        if n_days is None:
+            total = len(dates)
+        else:
+            if (
+                not isinstance(n_days, (int, np.integer))
+                or isinstance(n_days, (bool, np.bool_))
+                or n_days <= 0
+            ):
+                raise ValueError("n_days must be a positive integer")
+            n_days = int(n_days)
+            total = min(n_days, len(dates))
         if n_train is None:
             n_train = max(1, int(total * train_fraction))
         if n_val is None:
@@ -1081,6 +1093,7 @@ def train_validation_dates(
         train_dates = dates[train_idx]
         val_dates = dates[val_idx]
         split.min_day_difference = difference
+        split.n_days = n_days
         split.train_fraction = train_fraction
         split.val_fraction = val_fraction
     elif method == "manual":
