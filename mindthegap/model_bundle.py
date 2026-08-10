@@ -314,7 +314,7 @@ def options_from_bundle(metadata):
     ``metadata["options"]``. This rebuilds the :class:`Options` object so the
     identical data configuration (variable names, transforms, temporal lags,
     standardization, channel order) can be replayed through
-    :func:`mindthegap.build_standardized_lazy` in ``mode="gapfill"`` when
+    :func:`mindthegap.prepare_model_data` in ``mode="gapfill"`` when
     gap-filling with the loaded model. Raises if the metadata does not include a
     saved options section.
     """

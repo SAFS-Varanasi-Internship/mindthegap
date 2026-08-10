@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from mindthegap.data import build_standardized_lazy, demo_data
+from mindthegap.data import prepare_model_data, demo_data
 
 
 def test_demo_data_has_requested_shape_and_flags():
@@ -127,11 +127,11 @@ def test_demo_data_rejects_invalid_region(region, error, message):
         demo_data(region=region)
 
 
-def test_build_standardized_lazy_broadcasts_static_land_mask():
+def test_prepare_model_data_broadcasts_static_land_mask():
     ds, _ = demo_data(days=12, lat_size=8, lon_size=8)
     ds["land_flag"] = ds["land_flag"].isel(time=0, drop=True)
 
-    standardized, _ = build_standardized_lazy(
+    standardized, _ = prepare_model_data(
         ds,
         target_variable="chlor_a",
         missing_flag="cloud_flag",
@@ -145,6 +145,27 @@ def test_build_standardized_lazy_broadcasts_static_land_mask():
         standardized["land_flag"].isel(time=0, drop=True),
         standardized["land_flag"].isel(time=-1, drop=True),
     )
+
+
+def test_prepare_model_data_crops_to_unet_multiple():
+    from mindthegap.model import unet_spatial_multiple
+
+    multiple = unet_spatial_multiple()
+    # Sizes deliberately not multiples of the U-Net factor.
+    ds, _ = demo_data(days=12, lat_size=multiple + 3, lon_size=multiple + 5)
+
+    standardized, _ = prepare_model_data(
+        ds,
+        target_variable="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        std_vars=[],
+    )
+
+    assert standardized.sizes["lat"] % multiple == 0
+    assert standardized.sizes["lon"] % multiple == 0
+    assert standardized.sizes["lat"] == multiple
+    assert standardized.sizes["lon"] == multiple
 
 
 @pytest.mark.parametrize(

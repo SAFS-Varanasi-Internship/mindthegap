@@ -222,16 +222,16 @@ def test_data_options_log_target_defaults_false():
     assert Options.default().data.log_target is False
 
 
-def test_build_standardized_lazy_reads_config_from_options():
+def test_prepare_model_data_reads_config_from_options():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default()
     options.data.log_target = False
     options.data.n_temporal_lags = 2
     options.set_data_config(data=ds, metadata=metadata)
 
-    from mindthegap import build_standardized_lazy
+    from mindthegap import prepare_model_data
 
-    _, stats = build_standardized_lazy(ds, options=options.data)
+    _, stats = prepare_model_data(ds, options=options.data)
 
     assert options.data.is_resolved()
     assert options.data.transforms["temporal_lags"] == 2
@@ -240,13 +240,13 @@ def test_build_standardized_lazy_reads_config_from_options():
     assert options.data.target_std == float(stats["full_target"][1])
 
 
-def test_build_standardized_lazy_defaults_output_chunks_from_gridder():
+def test_prepare_model_data_defaults_output_chunks_from_gridder():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
 
-    from mindthegap import build_standardized_lazy
+    from mindthegap import prepare_model_data
 
-    output, _ = build_standardized_lazy(
+    output, _ = prepare_model_data(
         ds, options=options.data, gridder=options.gridder
     )
 
@@ -272,52 +272,52 @@ def test_options_verbose_default_true_and_roundtrips():
     assert Options.from_dict(options.to_dict()).verbose is False
 
 
-def test_build_standardized_lazy_accepts_full_options():
+def test_prepare_model_data_accepts_full_options():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.verbose = False
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
-    from mindthegap import build_standardized_lazy
+    from mindthegap import prepare_model_data
 
-    output, _ = build_standardized_lazy(ds, options)
+    output, _ = prepare_model_data(ds, options)
 
     # train_dates and chunks come from options.split / options.gridder
     assert output.chunks["time"][0] == options.gridder.time_chunk
     assert options.data.is_resolved()
 
 
-def test_build_standardized_lazy_errors_when_split_unset():
+def test_prepare_model_data_errors_when_split_unset():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
 
-    from mindthegap import build_standardized_lazy
+    from mindthegap import prepare_model_data
 
     with pytest.raises(ValueError, match="options.split has no dates"):
-        build_standardized_lazy(ds, options)
+        prepare_model_data(ds, options)
 
 
-def test_build_standardized_lazy_errors_on_inconsistent_split():
+def test_prepare_model_data_errors_on_inconsistent_split():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.split.train_dates = ["1990-01-01"]
     options.split.val_dates = ["1990-01-02"]
 
-    from mindthegap import build_standardized_lazy
+    from mindthegap import prepare_model_data
 
     with pytest.raises(ValueError, match="inconsistent with ds"):
-        build_standardized_lazy(ds, options)
+        prepare_model_data(ds, options)
 
 
-def test_build_standardized_lazy_reads_add_geo_from_options():
+def test_prepare_model_data_reads_add_geo_from_options():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.data.add_geo = True
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
-    from mindthegap import build_standardized_lazy
+    from mindthegap import prepare_model_data
 
-    build_standardized_lazy(ds, options, verbose=False)
+    prepare_model_data(ds, options, verbose=False)
 
     assert options.data.add_geo is True
     assert options.data.transforms["add_geo"] is True

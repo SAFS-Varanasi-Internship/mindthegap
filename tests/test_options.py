@@ -6,7 +6,7 @@ from mindthegap import (
     FitOptions,
     GridderOptions,
     Options,
-    build_standardized_lazy,
+    prepare_model_data,
     demo_data,
     make_xbatcher,
 )
@@ -84,12 +84,12 @@ def test_data_options_from_dict_ignores_unknown_keys():
     assert data.target == "full_target"
 
 
-def test_build_standardized_lazy_populates_data_options():
+def test_prepare_model_data_populates_data_options():
     ds, _ = demo_data(days=12, lat_size=8, lon_size=8, seed=5)
     options = Options.default()
     options.data.log_target = True
 
-    output, stats = build_standardized_lazy(
+    output, stats = prepare_model_data(
         ds,
         target_variable="chlor_a",
         missing_flag="cloud_flag",
@@ -112,7 +112,7 @@ def test_build_standardized_lazy_populates_data_options():
 
 def test_make_xbatcher_accepts_gridder_options():
     ds, _ = demo_data(days=12, lat_size=16, lon_size=16, seed=1)
-    output, _ = build_standardized_lazy(
+    output, _ = prepare_model_data(
         ds,
         target_variable="chlor_a",
         missing_flag="cloud_flag",

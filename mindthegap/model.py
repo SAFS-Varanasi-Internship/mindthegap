@@ -5,6 +5,65 @@ from dataclasses import replace
 import numpy as np
 import xarray as xr
 
+# Fallback spatial multiple for :func:`UNet` inputs, used only if the factor
+# cannot be derived by inspecting the built model. Each encoder stage halves
+# the spatial dimensions, so inputs must be divisible by ``2 ** UNET_DEPTH``.
+UNET_DEPTH = 3
+
+
+def unet_spatial_multiple(build_fn=None):
+    """Required spatial multiple for :func:`UNet` inputs.
+
+    The U-Net halves each spatial dimension once per encoder downsampling
+    stage, so every spatial dimension of the input must be divisible by the
+    total downsampling factor for the decoder skip-connections to line up.
+
+    The factor is derived by **inspecting the actual model** so it stays
+    correct if :func:`UNet`'s architecture changes (e.g. more encoder stages
+    are added). A small model is built and its downsampling layers'
+    strides/pool sizes are multiplied together per spatial axis; the larger of
+    the two axis factors is returned. If the model cannot be built (for example
+    TensorFlow is unavailable) the function falls back to ``2 ** UNET_DEPTH``.
+
+    ``build_fn`` builds the model to inspect; it defaults to :func:`UNet` and is
+    mainly a testing seam.
+    """
+    if build_fn is None:
+        build_fn = UNet
+    try:
+        import tensorflow as tf
+
+        model = build_fn((None, None, 1), verbose=False)
+    except Exception:
+        return 2 ** UNET_DEPTH
+
+    row_factor = 1
+    col_factor = 1
+    for layer in model.layers:
+        # Only downsampling layers constrain the input size: pooling and
+        # strided Conv2D. Conv2DTranspose upsamples, so it is excluded even
+        # though it also carries a ``strides`` attribute.
+        if isinstance(layer, tf.keras.layers.Conv2DTranspose):
+            continue
+        if isinstance(
+            layer,
+            (tf.keras.layers.MaxPooling2D, tf.keras.layers.AveragePooling2D),
+        ):
+            strides = getattr(layer, "pool_size", None) or getattr(
+                layer, "strides", None
+            )
+        elif isinstance(layer, tf.keras.layers.Conv2D):
+            strides = getattr(layer, "strides", (1, 1))
+        else:
+            continue
+        if not strides or tuple(strides) == (1, 1):
+            continue
+        row_factor *= int(strides[0])
+        col_factor *= int(strides[1])
+
+    factor = max(row_factor, col_factor)
+    return factor if factor > 1 else 2 ** UNET_DEPTH
+
 
 def make_tf_gen(batcher, x_vars, label="full_target"):
     """Create a TensorFlow generator from standardized xbatcher blocks."""
@@ -354,7 +413,7 @@ def gapfill_std(ds_std, model, metadata, *, time=None, verbose=None):
     """Run a trained model on an already-standardized dataset (low level).
 
     ``ds_std`` must be the output of
-    :func:`mindthegap.build_standardized_lazy` in ``mode="gapfill"`` for the
+    :func:`mindthegap.prepare_model_data` in ``mode="gapfill"`` for the
     same model: it already carries the inference channels (real observations,
     ``estimate_flag`` over the cloud/NaN pixels to fill, ``unavailable_flag`` all
     zero) so **no relabelling is done here**. Channels are stacked in the exact
@@ -372,7 +431,7 @@ def gapfill_std(ds_std, model, metadata, *, time=None, verbose=None):
     Parameters
     ----------
     ds_std : xarray.Dataset
-        Standardized gap-fill dataset (from ``build_standardized_lazy(...,
+        Standardized gap-fill dataset (from ``prepare_model_data(...,
         mode="gapfill")``).
     model : keras.Model
         Loaded model, e.g. from :func:`mindthegap.load_model_bundle`.

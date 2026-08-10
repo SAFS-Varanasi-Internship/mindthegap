@@ -334,7 +334,7 @@ class DataOptions:
         spatial bounds, available period) so notebooks do not have to unpack
         the metadata dict into floating variables. Standardization statistics
         and input channel order are filled in later by
-        :func:`mindthegap.build_standardized_lazy`.
+        :func:`mindthegap.prepare_model_data`.
         """
         dataset_info = metadata.get("dataset", {})
         target_info = metadata.get("target", {})
