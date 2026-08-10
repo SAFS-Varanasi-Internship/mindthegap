@@ -5,7 +5,7 @@ import pytest
 from mindthegap import (
     Options,
     SplitOptions,
-    build_standardized_lazy,
+    prepare_model_data,
     demo_data,
     make_generator,
     train_validation_dates,
@@ -15,7 +15,7 @@ from mindthegap import (
 def _prepared(days=60, seed=3):
     ds, metadata = demo_data(days=days, lat_size=16, lon_size=16, seed=seed)
     options = Options.default(data=ds, metadata=metadata)
-    ds_std, _ = build_standardized_lazy(
+    ds_std, _ = prepare_model_data(
         ds, options=options.data, gridder=options.gridder
     )
     return ds, ds_std, options
@@ -125,11 +125,11 @@ def test_make_generator_returns_datasets_and_steps():
     assert y.shape[-1] == 1
 
 
-def test_build_standardized_lazy_defaults_chunks_from_gridder():
+def test_prepare_model_data_defaults_chunks_from_gridder():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=2)
     options = Options.default(data=ds, metadata=metadata)
 
-    ds_std, _ = build_standardized_lazy(
+    ds_std, _ = prepare_model_data(
         ds, options=options.data, gridder=options.gridder
     )
 

@@ -2,7 +2,7 @@
 from .data import (
     demo_data,
     crop_to_multiple,
-    build_standardized_lazy,
+    prepare_model_data,
     train_validation_dates,
 )
 from .evaluation import (
@@ -41,8 +41,9 @@ __all__ = [
     "compute_mae",
     "compute_mse",
     "make_tf_gen",
-    "build_standardized_lazy",
+    "prepare_model_data",
     "make_xbatcher",
+    "unet_spatial_multiple",
     "make_generator",
     "train_validation_dates",
     "fit_model",

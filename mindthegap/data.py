@@ -542,7 +542,7 @@ def _add_spherical_coords(ds, lat="lat", lon="lon"):
     )
 
 
-def build_standardized_lazy(
+def prepare_model_data(
     ds,
     options=None,
     *,
@@ -561,7 +561,12 @@ def build_standardized_lazy(
     mode="train",
     verbose=None,
 ):
-    """Build lazy model inputs, targets, and standardization statistics.
+    """Prepare lazy model inputs, targets, and standardization statistics.
+
+    The spatial dimensions of ``ds`` are first cropped so their lengths are a
+    multiple of the U-Net's downsampling factor (see
+    :func:`unet_spatial_multiple`) via :func:`crop_to_multiple`, so callers no
+    longer need to crop the field themselves.
 
     The returned dataset contains the transformed target, the target values
     the model can actually observe (``observed_target``), temporal lags of
@@ -629,7 +634,7 @@ def build_standardized_lazy(
     are reused (``train_dates`` is ignored) so inputs match training exactly.
 
     Returns ``(output, stats)``. The recommended call is
-    ``build_standardized_lazy(ds, options)`` where ``options`` is the full
+    ``prepare_model_data(ds, options)`` where ``options`` is the full
     :class:`Options` object: the variable names/features/``log_target`` /
     ``n_temporal_lags`` / ``add_geo`` come from ``options.data``, the output
     chunking from ``options.gridder``, and ``train_dates`` from
@@ -736,6 +741,12 @@ def build_standardized_lazy(
             raise ValueError(f"Required coordinate '{coord}' not found in ds")
     if n_temporal_lags < 0:
         raise ValueError("n_temporal_lags must be non-negative")
+
+    from .model import unet_spatial_multiple
+
+    # Crop the field so the spatial dims are a multiple of the U-Net's
+    # downsampling factor; this used to be a separate caller step.
+    ds = crop_to_multiple(ds, multiple=unet_spatial_multiple())
 
     processed = ds[required].rename({target_variable: "full_target"})
     for flag in (missing_flag, land_flag):
