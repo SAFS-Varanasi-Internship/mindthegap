@@ -3,6 +3,7 @@ from .data import (
     demo_data,
     crop_to_multiple,
     prepare_model_data,
+    synthetic_cloud_cube,
     train_validation_dates,
 )
 from .evaluation import (
@@ -42,6 +43,7 @@ __all__ = [
     "compute_mse",
     "make_tf_gen",
     "prepare_model_data",
+    "synthetic_cloud_cube",
     "make_xbatcher",
     "unet_spatial_multiple",
     "make_generator",

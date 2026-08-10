@@ -542,6 +542,60 @@ def _add_spherical_coords(ds, lat="lat", lon="lon"):
     )
 
 
+def synthetic_cloud_cube(
+    n_time,
+    n_lat,
+    n_lon,
+    coverage,
+    blob_sigma=6.0,
+    time_sigma=0.0,
+    rng=None,
+):
+    """Return a ``(time, lat, lon)`` boolean synthetic-cloud cube.
+
+    Smooth gaussian noise is thresholded so that roughly ``coverage`` of the
+    pixels are flagged as cloud. This produces spatially-blobby clouds (rather
+    than salt-and-pepper noise) that are optionally temporally autocorrelated.
+
+    Parameters
+    ----------
+    n_time, n_lat, n_lon : int
+        Cube dimensions.
+    coverage : float
+        Target fraction of pixels covered by synthetic cloud (0-1).
+    blob_sigma : float
+        Gaussian smoothing width in the spatial dimensions; larger values make
+        larger clouds.
+    time_sigma : float
+        Gaussian smoothing width along the time axis. ``0`` gives independent
+        clouds per time step; larger values make clouds that persist and evolve
+        across days (with cores that persist and edges that flicker). Temporal
+        correlation keeps the previous/next-day lag channels honest so the model
+        cannot trivially copy the hidden pixel from a neighbouring day.
+    rng : numpy.random.Generator, optional
+        Random generator. A fresh default generator is used when ``None``.
+
+    Notes
+    -----
+    This generator is adapted from Troy's self-supervised cloud experiments; it
+    is intended for hiding observed ocean pixels during self-supervised
+    training so the model has a known target at the hidden pixels.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    if not 0 <= coverage <= 1:
+        raise ValueError("coverage must be between 0 and 1")
+    if rng is None:
+        rng = np.random.default_rng()
+    field = gaussian_filter(
+        rng.standard_normal((n_time, n_lat, n_lon)),
+        sigma=(time_sigma, blob_sigma, blob_sigma),
+    )
+    if coverage <= 0:
+        return np.zeros((n_time, n_lat, n_lon), dtype=bool)
+    return field > np.quantile(field, 1.0 - coverage)
+
+
 def prepare_model_data(
     ds,
     options=None,
@@ -554,6 +608,11 @@ def prepare_model_data(
     std_vars=None,
     log_target=None,
     missing_flag_shift=10,
+    cloud_mode="synthetic",
+    coverage=0.4,
+    blob_sigma=6.0,
+    time_sigma=2.0,
+    cloud_seed=None,
     n_temporal_lags=None,
     output_chunks=None,
     add_geo=None,
@@ -619,9 +678,23 @@ def prepare_model_data(
     Modes
     -----
     ``mode="train"`` (default) produces the self-supervised training inputs
-    described above: temporally-shifted synthetic gaps are punched into the
-    observed data (``estimate_flag=1`` there, with the true value retained as
-    the learning target) and real clouds become ``unavailable_flag=1``.
+    described above. Synthetic clouds are punched into the observed data
+    (``estimate_flag=1`` there, with the true value retained as the learning
+    target) and real clouds become ``unavailable_flag=1``. How the synthetic
+    clouds are generated is controlled by ``cloud_mode``:
+
+    - ``cloud_mode="synthetic"`` (default) generates random, spatially-blobby,
+      temporally-autocorrelated clouds with :func:`synthetic_cloud_cube`. Cloud
+      size is set by ``blob_sigma``, day-to-day persistence by ``time_sigma``
+      (``0`` = independent per composite; larger = clouds that last and evolve),
+      and the target covered fraction by ``coverage``. ``cloud_seed`` (falling
+      back to the run's global seed when a full :class:`Options` is supplied)
+      makes the clouds reproducible. Temporally-correlated clouds keep the
+      previous/next-day lag channels honest.
+    - ``cloud_mode="shift"`` reuses the historical behaviour: the real cloud
+      mask ``missing_flag`` is rolled forward by ``missing_flag_shift`` time
+      steps and those pixels are hidden. This borrows a real cloud pattern from
+      ``missing_flag_shift`` days ahead.
 
     ``mode="gapfill"`` produces inference inputs for gap-filling. No synthetic
     clouds are created: ``observed_target`` is the real observed data,
@@ -652,6 +725,10 @@ def prepare_model_data(
     if mode not in ("train", "gapfill"):
         raise ValueError(
             f"mode must be 'train' or 'gapfill', got {mode!r}"
+        )
+    if cloud_mode not in ("synthetic", "shift"):
+        raise ValueError(
+            f"cloud_mode must be 'synthetic' or 'shift', got {cloud_mode!r}"
         )
 
     # Accept the full Options object: pull the data/gridder/split sections from
@@ -690,6 +767,8 @@ def prepare_model_data(
             gridder = full.gridder
         if verbose is None:
             verbose = full.verbose
+        if cloud_seed is None:
+            cloud_seed = full.resolved_seed()
         options = full.data
 
     if verbose is None:
@@ -760,29 +839,57 @@ def prepare_model_data(
 
     processed["land_flag"] = (processed[land_flag] == 1).astype("int8")
     if mode == "train":
-        # Self-supervised training: punch temporally-shifted synthetic gaps into
-        # the observed data. The hidden pixels become estimate_flag=1 (their true
-        # value is known and supplies the learning signal); real clouds become
+        # Self-supervised training: punch synthetic gaps into the observed data.
+        # The hidden pixels become estimate_flag=1 (their true value is known
+        # and supplies the learning signal); real clouds become
         # unavailable_flag=1.
-        shifted_missing = processed[missing_flag].roll(
-            time=-missing_flag_shift,
-            roll_coords=False,
-        )
-        processed["observed_target"] = processed["full_target"].where(
-            shifted_missing != 0
-        )
         processed["unavailable_flag"] = (processed[missing_flag] == 1).astype(
             "int8"
+        )
+        # Pixels that are real ocean observations and therefore eligible to be
+        # hidden by a synthetic cloud (there must be a true value to learn from).
+        eligible = (
+            (processed[missing_flag] == 0)
+            & (processed["land_flag"] == 0)
+            & processed["full_target"].notnull()
+        )
+        if cloud_mode == "synthetic":
+            # Random, spatially-blobby, temporally-autocorrelated clouds.
+            rng = np.random.default_rng(cloud_seed)
+            cube = synthetic_cloud_cube(
+                processed.sizes["time"],
+                processed.sizes["lat"],
+                processed.sizes["lon"],
+                coverage=coverage,
+                blob_sigma=blob_sigma,
+                time_sigma=time_sigma,
+                rng=rng,
+            )
+            synthetic_cloud = xr.DataArray(
+                cube,
+                dims=("time", "lat", "lon"),
+                coords={
+                    "time": processed["time"],
+                    "lat": processed["lat"],
+                    "lon": processed["lon"],
+                },
+            )
+            estimate = eligible & synthetic_cloud
+        else:
+            # Historical behaviour: borrow the real cloud pattern from
+            # ``missing_flag_shift`` time steps ahead and hide those pixels.
+            shifted_missing = processed[missing_flag].roll(
+                time=-missing_flag_shift,
+                roll_coords=False,
+            )
+            estimate = eligible & (shifted_missing == 0)
+        processed["estimate_flag"] = estimate.astype("int8")
+        processed["observed_target"] = processed["full_target"].where(
+            ~estimate
         )
         processed["observed_flag"] = processed[
             "observed_target"
         ].notnull().astype("int8")
-        processed["estimate_flag"] = (
-            (shifted_missing == 0)
-            & (processed["land_flag"] == 0)
-            & (processed["unavailable_flag"] == 0)
-            & processed["full_target"].notnull()
-        ).astype("int8")
     else:
         # Gap-filling: no synthetic clouds. The observed target is the real
         # observed data (missing values are already NaN and become 0 later). Real
@@ -916,7 +1023,19 @@ def prepare_model_data(
             "target": "natural logarithm" if log_target else "none",
             "temporal_lags": n_temporal_lags,
             "add_geo": bool(add_geo),
+            "cloud_mode": cloud_mode,
+            "cloud_seed": cloud_seed,
         }
+        if cloud_mode == "synthetic":
+            options.transforms.update(
+                {
+                    "cloud_coverage": coverage,
+                    "cloud_blob_sigma": blob_sigma,
+                    "cloud_time_sigma": time_sigma,
+                }
+            )
+        else:
+            options.transforms["missing_flag_shift"] = missing_flag_shift
         options.standardization = {
             name: {
                 "mean": float(means[name]),
