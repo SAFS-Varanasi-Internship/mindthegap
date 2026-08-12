@@ -32,6 +32,7 @@ from .options import (
     FitOptions,
     SplitOptions,
 )
+from . import cloud_bank
 # Expose the viz module as a submodule (lazy import by users)
 from . import viz  # users can do: from mindthegap import viz; viz.plot_prediction_observed(...)
 
@@ -60,5 +61,6 @@ __all__ = [
     "GridderOptions",
     "FitOptions",
     "SplitOptions",
+    "cloud_bank",
     "viz",
 ]

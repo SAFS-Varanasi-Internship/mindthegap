@@ -13,3 +13,7 @@ dependencies = ["PyYAML>=6.0", "scipy>=1.10"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["mindthegap*"]
+
+[tool.setuptools.package-data]
+mindthegap = ["cloud_banks_manifest.json"]
+

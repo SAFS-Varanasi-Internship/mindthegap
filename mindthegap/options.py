@@ -287,6 +287,16 @@ class DataOptions:
     default ``"user manual"`` when the user loaded the data with their own
     script. It is carried into the saved model-bundle metadata and printed by
     :func:`mindthegap.load_model_bundle`.
+
+    The synthetic-cloud configuration for ``mode="train"`` lives here so
+    ``options`` remains the single source of truth for how the training data is
+    created: ``cloud_mode`` selects the cloud source (``"synthetic_bank"`` --
+    the default -- ``"synthetic"``, or ``"shift"``), ``cloud_coverage`` /
+    ``cloud_blob_sigma`` / ``cloud_time_sigma`` parameterise the synthetic
+    clouds, ``missing_flag_shift`` is used by ``cloud_mode="shift"``, and
+    ``cloud_seed`` (``None`` = inherit the global ``options.seed``) makes the
+    clouds reproducible. :func:`mindthegap.prepare_model_data` reads these and
+    never takes them as call arguments.
     """
 
     source: Optional[str] = None
@@ -303,6 +313,12 @@ class DataOptions:
     log_target: bool = False
     n_temporal_lags: int = 1
     add_geo: bool = False
+    cloud_mode: str = "synthetic_bank"
+    cloud_coverage: float = 0.4
+    cloud_blob_sigma: float = 6.0
+    cloud_time_sigma: float = 2.0
+    missing_flag_shift: int = 10
+    cloud_seed: Optional[int] = None
     input_names: list = field(default_factory=list)
     transforms: dict = field(default_factory=dict)
     standardization: dict = field(default_factory=dict)
@@ -320,6 +336,13 @@ class DataOptions:
         self.lon_bounds = _coerce_bounds(self.lon_bounds, "lon_bounds")
         self.input_names = list(self.input_names)
         self.features = list(self.features)
+        if self.cloud_mode not in ("synthetic_bank", "synthetic", "shift"):
+            raise ValueError(
+                "cloud_mode must be 'synthetic_bank', 'synthetic', or "
+                f"'shift', got {self.cloud_mode!r}"
+            )
+        if not 0 <= self.cloud_coverage <= 1:
+            raise ValueError("cloud_coverage must be between 0 and 1")
 
     def is_resolved(self):
         """Return ``True`` once the pipeline has populated the target/inputs."""

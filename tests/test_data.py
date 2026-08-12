@@ -3,6 +3,24 @@ import pytest
 import xarray as xr
 
 from mindthegap.data import prepare_model_data, demo_data
+from mindthegap.options import DataOptions
+
+
+def _data_options(ds, **cloud_kwargs):
+    """DataOptions resolved for the demo dataset with cloud config overrides.
+
+    Cloud configuration is canonical on ``options.data`` (never a
+    ``prepare_model_data`` argument), so tests set it here.
+    """
+    opts = DataOptions(
+        target_variable="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        **cloud_kwargs,
+    )
+    # Mark as resolved enough for prepare_model_data to read the fields.
+    opts.target = "chlor_a"
+    return opts
 
 
 def test_demo_data_has_requested_shape_and_flags():
@@ -193,7 +211,7 @@ def test_prepare_model_data_synthetic_clouds_hide_observed_ocean():
         missing_flag="cloud_flag",
         land_flag="land_flag",
         std_vars=[],
-        cloud_mode="synthetic",
+        options=_data_options(ds, cloud_mode="synthetic"),
         cloud_seed=1,
     )
 
@@ -218,7 +236,7 @@ def test_prepare_model_data_synthetic_clouds_are_reproducible():
         missing_flag="cloud_flag",
         land_flag="land_flag",
         std_vars=[],
-        cloud_mode="synthetic",
+        options=_data_options(ds, cloud_mode="synthetic"),
     )
     a, _ = prepare_model_data(ds, cloud_seed=42, **common)
     b, _ = prepare_model_data(ds, cloud_seed=42, **common)
@@ -241,8 +259,7 @@ def test_prepare_model_data_shift_cloud_mode_uses_future_clouds():
         missing_flag="cloud_flag",
         land_flag="land_flag",
         std_vars=[],
-        cloud_mode="shift",
-        missing_flag_shift=5,
+        options=_data_options(ds, cloud_mode="shift", missing_flag_shift=5),
     )
 
     estimate = standardized["estimate_flag"].values == 1
@@ -252,13 +269,13 @@ def test_prepare_model_data_shift_cloud_mode_uses_future_clouds():
 
 
 @pytest.mark.parametrize(
-    "kwargs",
+    "cloud_kwargs",
     [
-        {"cloud_mode": "synthetic", "cloud_seed": 1, "coverage": 0.5},
+        {"cloud_mode": "synthetic", "cloud_coverage": 0.5},
         {"cloud_mode": "shift", "missing_flag_shift": 5},
     ],
 )
-def test_prepare_model_data_flags_are_mutually_exclusive(kwargs):
+def test_prepare_model_data_flags_are_mutually_exclusive(cloud_kwargs):
     # A pixel with both a real cloud and a synthetic cloud must count as real
     # only: estimate_flag never overlaps the other cloud/state flags. (land and
     # unavailable can co-occur in the raw demo data -- a real cloud reported
@@ -271,7 +288,8 @@ def test_prepare_model_data_flags_are_mutually_exclusive(kwargs):
         missing_flag="cloud_flag",
         land_flag="land_flag",
         std_vars=[],
-        **kwargs,
+        options=_data_options(ds, **cloud_kwargs),
+        cloud_seed=1,
     )
 
     estimate = standardized["estimate_flag"].values == 1
@@ -285,15 +303,12 @@ def test_prepare_model_data_flags_are_mutually_exclusive(kwargs):
     assert not (estimate & observed).any()
 
 
-def test_prepare_model_data_rejects_bad_cloud_mode():
-    ds, _ = demo_data(days=12, lat_size=8, lon_size=8)
+def test_data_options_rejects_bad_cloud_mode():
     with pytest.raises(ValueError, match="cloud_mode"):
-        prepare_model_data(
-            ds,
+        DataOptions(
             target_variable="chlor_a",
             missing_flag="cloud_flag",
             land_flag="land_flag",
-            std_vars=[],
             cloud_mode="nonsense",
         )
 
