@@ -1,0 +1,16 @@
+{
+  "release_tag": "cloud-banks-v1",
+  "asset_base_url": "https://github.com/SAFS-Varanasi-Internship/mindthegap/releases/download/cloud-banks-v1",
+  "banks": [
+    {
+      "filename": "clouds_blob6_time2_cov40_640x640_730d.nc",
+      "blob_sigma": 6.0,
+      "time_sigma": 2.0,
+      "coverage": 0.4,
+      "n_time": 730,
+      "n_lat": 640,
+      "n_lon": 640,
+      "sha256": "5f9ca0cfb1f70dc855d3c71ca4e361a93c8d4f64f0b5d2bd03fc2ffb96620bbb"
+    }
+  ]
+}

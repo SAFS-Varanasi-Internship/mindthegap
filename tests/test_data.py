@@ -3,6 +3,24 @@ import pytest
 import xarray as xr
 
 from mindthegap.data import prepare_model_data, demo_data
+from mindthegap.options import DataOptions
+
+
+def _data_options(ds, **cloud_kwargs):
+    """DataOptions resolved for the demo dataset with cloud config overrides.
+
+    Cloud configuration is canonical on ``options.data`` (never a
+    ``prepare_model_data`` argument), so tests set it here.
+    """
+    opts = DataOptions(
+        target_variable="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        **cloud_kwargs,
+    )
+    # Mark as resolved enough for prepare_model_data to read the fields.
+    opts.target = "chlor_a"
+    return opts
 
 
 def test_demo_data_has_requested_shape_and_flags():
@@ -166,6 +184,133 @@ def test_prepare_model_data_crops_to_unet_multiple():
     assert standardized.sizes["lon"] % multiple == 0
     assert standardized.sizes["lat"] == multiple
     assert standardized.sizes["lon"] == multiple
+
+
+def test_synthetic_cloud_cube_shape_and_coverage():
+    from mindthegap.data import synthetic_cloud_cube
+
+    rng = np.random.default_rng(0)
+    cube = synthetic_cloud_cube(
+        20, 32, 32, coverage=0.4, blob_sigma=4.0, time_sigma=2.0, rng=rng
+    )
+    assert cube.shape == (20, 32, 32)
+    assert cube.dtype == np.dtype("bool")
+    # Coverage should be close to the requested fraction.
+    assert abs(cube.mean() - 0.4) < 0.05
+    # Zero coverage yields an all-clear cube.
+    empty = synthetic_cloud_cube(4, 8, 8, coverage=0.0)
+    assert not empty.any()
+
+
+def test_prepare_model_data_synthetic_clouds_hide_observed_ocean():
+    ds, _ = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+
+    standardized, _ = prepare_model_data(
+        ds,
+        target_variable="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        std_vars=[],
+        options=_data_options(ds, cloud_mode="synthetic"),
+        cloud_seed=1,
+    )
+
+    estimate = standardized["estimate_flag"].values == 1
+    land = standardized["land_flag"].values == 1
+    unavailable = standardized["unavailable_flag"].values == 1
+
+    assert estimate.any()
+    # Synthetic clouds only hide real ocean observations.
+    assert not (estimate & land).any()
+    assert not (estimate & unavailable).any()
+    # The true value is hidden from observed_target but retained in full_target.
+    assert standardized["observed_target"].where(
+        standardized["estimate_flag"] == 1
+    ).isnull().all()
+
+
+def test_prepare_model_data_synthetic_clouds_are_reproducible():
+    ds, _ = demo_data(days=16, lat_size=16, lon_size=16, seed=5)
+    common = dict(
+        target_variable="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        std_vars=[],
+        options=_data_options(ds, cloud_mode="synthetic"),
+    )
+    a, _ = prepare_model_data(ds, cloud_seed=42, **common)
+    b, _ = prepare_model_data(ds, cloud_seed=42, **common)
+    c, _ = prepare_model_data(ds, cloud_seed=99, **common)
+
+    assert np.array_equal(
+        a["estimate_flag"].values, b["estimate_flag"].values
+    )
+    assert not np.array_equal(
+        a["estimate_flag"].values, c["estimate_flag"].values
+    )
+
+
+def test_prepare_model_data_shift_cloud_mode_uses_future_clouds():
+    ds, _ = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+
+    standardized, _ = prepare_model_data(
+        ds,
+        target_variable="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        std_vars=[],
+        options=_data_options(ds, cloud_mode="shift", missing_flag_shift=5),
+    )
+
+    estimate = standardized["estimate_flag"].values == 1
+    land = standardized["land_flag"].values == 1
+    assert estimate.any()
+    assert not (estimate & land).any()
+
+
+@pytest.mark.parametrize(
+    "cloud_kwargs",
+    [
+        {"cloud_mode": "synthetic", "cloud_coverage": 0.5},
+        {"cloud_mode": "shift", "missing_flag_shift": 5},
+    ],
+)
+def test_prepare_model_data_flags_are_mutually_exclusive(cloud_kwargs):
+    # A pixel with both a real cloud and a synthetic cloud must count as real
+    # only: estimate_flag never overlaps the other cloud/state flags. (land and
+    # unavailable can co-occur in the raw demo data -- a real cloud reported
+    # over land -- which is unrelated to synthetic-cloud creation.)
+    ds, _ = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+
+    standardized, _ = prepare_model_data(
+        ds,
+        target_variable="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        std_vars=[],
+        options=_data_options(ds, **cloud_kwargs),
+        cloud_seed=1,
+    )
+
+    estimate = standardized["estimate_flag"].values == 1
+    unavailable = standardized["unavailable_flag"].values == 1
+    land = standardized["land_flag"].values == 1
+    observed = standardized["observed_flag"].values == 1
+
+    assert estimate.any()
+    assert not (estimate & unavailable).any()
+    assert not (estimate & land).any()
+    assert not (estimate & observed).any()
+
+
+def test_data_options_rejects_bad_cloud_mode():
+    with pytest.raises(ValueError, match="cloud_mode"):
+        DataOptions(
+            target_variable="chlor_a",
+            missing_flag="cloud_flag",
+            land_flag="land_flag",
+            cloud_mode="nonsense",
+        )
 
 
 @pytest.mark.parametrize(

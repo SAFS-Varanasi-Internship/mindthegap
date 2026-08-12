@@ -1,5 +1,6 @@
 """Dataset loading, selection, feature engineering, and preparation."""
 
+import warnings
 from typing import Union
 from numbers import Real
 
@@ -473,6 +474,7 @@ def _load_indian_ocean():
         engine="zarr",
         backend_kwargs={"storage_options": {"token": "anon"}},
         consolidated=True,
+        chunks={"time": 100},
     )
     return ds
 
@@ -482,9 +484,17 @@ def _load_io_shared_public():
         "IO_rechunked.zarr",
         engine="zarr",
         consolidated=True,
+        chunks={"time": 100},
     )
+    # Keep the land mask lazy and chunked like the rest of the store so the
+    # dataset has consistent chunks (a static 2D mask broadcast to the full
+    # cube must match the time chunking of the other variables).
     land_flag_2d = ds.sst.isel(time=0).isnull()
-    land_flag = land_flag_2d.broadcast_like(ds.sst).astype("int8")
+    land_flag = (
+        land_flag_2d.broadcast_like(ds.sst)
+        .astype("int8")
+        .chunk(ds.sst.chunksizes)
+    )
     ds["CHL_cmes-land"] = land_flag
     return ds
 
@@ -542,6 +552,218 @@ def _add_spherical_coords(ds, lat="lat", lon="lon"):
     )
 
 
+def synthetic_cloud_cube(
+    n_time,
+    n_lat,
+    n_lon,
+    coverage,
+    blob_sigma=6.0,
+    time_sigma=0.0,
+    rng=None,
+):
+    """Return a ``(time, lat, lon)`` boolean synthetic-cloud cube.
+
+    Smooth gaussian noise is thresholded so that roughly ``coverage`` of the
+    pixels are flagged as cloud. This produces spatially-blobby clouds (rather
+    than salt-and-pepper noise) that are optionally temporally autocorrelated.
+
+    Parameters
+    ----------
+    n_time, n_lat, n_lon : int
+        Cube dimensions.
+    coverage : float
+        Target fraction of pixels covered by synthetic cloud (0-1).
+    blob_sigma : float
+        Gaussian smoothing width in the spatial dimensions; larger values make
+        larger clouds.
+    time_sigma : float
+        Gaussian smoothing width along the time axis. ``0`` gives independent
+        clouds per time step; larger values make clouds that persist and evolve
+        across days (with cores that persist and edges that flicker). Temporal
+        correlation keeps the previous/next-day lag channels honest so the model
+        cannot trivially copy the hidden pixel from a neighbouring day.
+    rng : numpy.random.Generator, optional
+        Random generator. A fresh default generator is used when ``None``.
+
+    Notes
+    -----
+    This generator is adapted from Troy's self-supervised cloud experiments; it
+    is intended for hiding observed ocean pixels during self-supervised
+    training so the model has a known target at the hidden pixels.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    if not 0 <= coverage <= 1:
+        raise ValueError("coverage must be between 0 and 1")
+    if rng is None:
+        rng = np.random.default_rng()
+    field = gaussian_filter(
+        rng.standard_normal((n_time, n_lat, n_lon)),
+        sigma=(time_sigma, blob_sigma, blob_sigma),
+    )
+    if coverage <= 0:
+        return np.zeros((n_time, n_lat, n_lon), dtype=bool)
+    return field > np.quantile(field, 1.0 - coverage)
+
+
+def _bank_to_cube(
+    bank,
+    n_time,
+    n_lat,
+    n_lon,
+    time_chunk=100,
+    rng=None,
+):
+    """Map a precomputed cloud ``bank`` onto a dataset grid, lazily.
+
+    ``bank`` is a boolean ``(bank_time, bank_lat, bank_lon)`` array (typically
+    the dask-backed :func:`mindthegap.cloud_bank.open_bank` result). The dataset
+    grid ``(n_time, n_lat, n_lon)`` is usually much larger than the bank -- e.g.
+    a multi-year global 4km field against a 2-year 640x640 bank -- so the bank is
+    tiled and wrapped to cover it:
+
+    - Time: dataset day ``t`` reads bank day ``(t0 + t) % bank_time`` for a random
+      start offset ``t0``. Because the bank itself is one continuous
+      temporally-correlated sequence, consecutive dataset days map to consecutive
+      bank days, so a day and its temporal-lag neighbours stay correlated (the
+      only seam is the single 2-year wrap boundary).
+    - Space: latitude/longitude are wrapped modulo the bank size with random
+      offsets, and each *tile* of the output is optionally flipped on either
+      spatial axis. This covers an arbitrarily large field from a small bank
+      while avoiding an obvious repeating pattern.
+
+    The result is a lazy dask boolean cube chunked to
+    ``(time_chunk, n_lat, n_lon)`` (spatial tiling is handled by the pipeline's
+    own chunking downstream). All random choices come from ``rng`` so the cube is
+    reproducible from the seed alone.
+    """
+    import dask.array as da
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    bank_time, bank_lat, bank_lon = bank.shape
+
+    # Underlying bool ndarray for point indexing inside the block function. The
+    # bank is modest (a couple hundred MB unpacked) and shared across blocks.
+    bank_values = np.asarray(bank.data if hasattr(bank, "data") else bank)
+    if hasattr(bank_values, "compute"):
+        bank_values = bank_values.compute()
+
+    time_chunk = int(max(1, min(time_chunk, n_time)))
+
+    t0 = int(rng.integers(0, bank_time))
+    lat0 = int(rng.integers(0, bank_lat))
+    lon0 = int(rng.integers(0, bank_lon))
+    # Per spatial-tile flips keyed by a coarse tile grid so wrapping the small
+    # bank across a large field does not produce an obvious repeat.
+    flip_period = max(1, bank_lat), max(1, bank_lon)
+    flip_lat = rng.integers(0, 2, size=(n_lat // flip_period[0] + 1,)).astype(
+        bool
+    )
+    flip_lon = rng.integers(0, 2, size=(n_lon // flip_period[1] + 1,)).astype(
+        bool
+    )
+
+    lat_idx = (lat0 + np.arange(n_lat)) % bank_lat
+    lon_idx = (lon0 + np.arange(n_lon)) % bank_lon
+
+    def _block(block_info=None):
+        (ts, te), (las, lae), (los, loe) = block_info[None]["array-location"]
+        t_src = (t0 + np.arange(ts, te)) % bank_time
+        la_src = lat_idx[las:lae]
+        lo_src = lon_idx[los:loe]
+        out = bank_values[np.ix_(t_src, la_src, lo_src)].copy()
+        # Apply per-tile flips based on which bank tile each row/col falls in.
+        la_tile = (lat0 + np.arange(las, lae)) // flip_period[0]
+        lo_tile = (lon0 + np.arange(los, loe)) // flip_period[1]
+        for i, tile in enumerate(np.unique(la_tile)):
+            if flip_lat[tile % len(flip_lat)]:
+                rows = np.where(la_tile == tile)[0]
+                out[:, rows, :] = out[:, rows[::-1], :]
+        for tile in np.unique(lo_tile):
+            if flip_lon[tile % len(flip_lon)]:
+                cols = np.where(lo_tile == tile)[0]
+                out[:, :, cols] = out[:, :, cols[::-1]]
+        return out
+
+    return da.map_blocks(
+        _block,
+        dtype=bool,
+        chunks=(
+            tuple(
+                min(time_chunk, n_time - s)
+                for s in range(0, n_time, time_chunk)
+            ),
+            (n_lat,),
+            (n_lon,),
+        ),
+    )
+
+
+def _resolve_chunks(ds, gridder):
+    """Return dask chunks for the standardized dataset built in this pipeline.
+
+    The chunks are chosen so that (a) the lazy graph stays small regardless of
+    the incoming store's chunking (which we do not control) and (b) the chunks
+    align with how ``ds_std`` is later consumed.
+
+    Time is chunked into blocks of ``gridder.time_chunk`` (default 100) so
+    per-frame ``sel``/``isel`` in gap-fill/visualization and the temporal patch
+    length used by xbatcher both read a bounded run of time steps.
+
+    For the spatial dims:
+
+    - When the field is small enough to fit as a single spatial block (the
+      common case, and whenever ``gridder.tile_size`` is ``"full"``), the whole
+      ``lat``/``lon`` extent is one chunk. This gives the smallest possible
+      graph and lets each xbatcher tile / frame read a single chunk.
+    - When the field is large and xbatcher must tile it spatially, the chunks
+      are aligned with ``gridder.tile_size`` so each spatial patch maps onto one
+      (or a few) dask chunks instead of slicing into a single enormous
+      full-field chunk. ``tile_size`` is a multiple of the U-Net downsampling
+      factor, and the field has already been cropped to a multiple of it, so
+      tile-aligned chunks tile the field cleanly.
+    """
+    default_time = 100
+    time_chunk = default_time
+    tile_size = None
+    if gridder is not None:
+        time_chunk = getattr(gridder, "time_chunk", default_time) or default_time
+        tile_size = getattr(gridder, "tile_size", None)
+
+    from .options import GridderOptions
+
+    n_time = ds.sizes.get("time", time_chunk)
+    time_chunk = int(max(1, min(time_chunk, n_time)))
+
+    n_lat = ds.sizes.get("lat")
+    n_lon = ds.sizes.get("lon")
+
+    def _tile_len(requested, size):
+        if requested is None or size is None:
+            return -1
+        try:
+            requested = int(requested)
+        except (TypeError, ValueError):
+            return -1
+        if requested <= 0 or requested >= size:
+            return -1
+        return requested
+
+    if GridderOptions._is_full(tile_size):
+        lat_chunk = -1
+        lon_chunk = -1
+    elif isinstance(tile_size, (tuple, list)) and len(tile_size) == 2:
+        lat_chunk = _tile_len(tile_size[0], n_lat)
+        lon_chunk = _tile_len(tile_size[1], n_lon)
+    else:
+        lat_chunk = -1
+        lon_chunk = -1
+
+    return {"time": time_chunk, "lat": lat_chunk, "lon": lon_chunk}
+
+
 def prepare_model_data(
     ds,
     options=None,
@@ -553,7 +775,7 @@ def prepare_model_data(
     train_dates=None,
     std_vars=None,
     log_target=None,
-    missing_flag_shift=10,
+    cloud_seed=None,
     n_temporal_lags=None,
     output_chunks=None,
     add_geo=None,
@@ -571,9 +793,15 @@ def prepare_model_data(
     The returned dataset contains the transformed target, the target values
     the model can actually observe (``observed_target``), temporal lags of
     that observed target, seasonal channels, three per-pixel state flags,
-    optional feature variables, and optional spherical coordinates. If
-    ``output_chunks`` is not None, then a dask array with ``output_chunks``
-    chunking is returned.
+    optional feature variables, and optional spherical coordinates. When the
+    inputs are dask-backed the result is lazy and chunked: pass
+    ``output_chunks`` (a ``{"time": ..., "lat": ..., "lon": ...}`` mapping, with
+    ``-1`` meaning "one chunk over the whole dimension") to control the
+    chunking explicitly. When it is ``None`` the chunking is chosen
+    automatically from the gridder so the lazy graph stays small and the chunks
+    align with how the standardized dataset is consumed downstream (whole
+    spatial frames for a block of time steps, or tile-aligned chunks when the
+    field is large enough that xbatcher must tile it spatially).
 
     Channel semantics
     -----------------
@@ -619,9 +847,48 @@ def prepare_model_data(
     Modes
     -----
     ``mode="train"`` (default) produces the self-supervised training inputs
-    described above: temporally-shifted synthetic gaps are punched into the
-    observed data (``estimate_flag=1`` there, with the true value retained as
-    the learning target) and real clouds become ``unavailable_flag=1``.
+    described above. Synthetic clouds are punched into the observed data
+    (``estimate_flag=1`` there, with the true value retained as the learning
+    target) and real clouds become ``unavailable_flag=1``. How the synthetic
+    clouds are generated is controlled by ``options.data.cloud_mode`` (with the
+    related ``options.data.cloud_coverage`` / ``cloud_blob_sigma`` /
+    ``cloud_time_sigma`` / ``missing_flag_shift`` / ``cloud_seed`` fields) --
+    the cloud configuration is canonical on ``options`` and is not a call
+    argument:
+
+    - ``cloud_mode="synthetic_bank"`` (default) draws synthetic clouds from a
+      precomputed *bank* -- a small, self-describing netCDF cube built offline
+      with the same construction as :func:`synthetic_cloud_cube`. The bank is
+      resolved from the packaged manifest by matching ``cloud_coverage`` /
+      ``cloud_blob_sigma`` / ``cloud_time_sigma``, downloaded on first use and
+      cached, then tiled/wrapped over the dataset grid with random day/space
+      offsets and per-tile flips (all controlled by ``cloud_seed``). Because the
+      bank is one continuous temporally-correlated sequence, a day and its
+      ``n_temporal_lags`` neighbours stay correlated. This is memory-bounded and
+      independent of record length. If no bank matches the requested parameters
+      (or the download fails) it falls back to on-the-fly ``"synthetic"``
+      generation with a warning.
+    - ``cloud_mode="synthetic"`` generates random, spatially-blobby,
+      temporally-correlated clouds *on the fly*. Cloud size is set by
+      ``cloud_blob_sigma``, day-to-day persistence by ``cloud_time_sigma``
+      (``0`` = independent per composite; larger = clouds that last and evolve),
+      and the target covered fraction by ``cloud_coverage``. ``cloud_seed``
+      (falling back to the run's global seed when a full :class:`Options` is
+      supplied) makes the clouds reproducible. The full ``(time, lat, lon)``
+      field is smoothed with :func:`synthetic_cloud_cube`, so this is the
+      original, more expensive path -- it materialises the whole cube in memory
+      and its cost grows with the size of the record. Use ``"synthetic_bank"``
+      for large, multi-year records.
+    - ``cloud_mode="shift"`` reuses the historical behaviour: the real cloud
+      mask ``missing_flag`` is rolled forward by ``missing_flag_shift`` time
+      steps and those pixels are hidden. This borrows a real cloud pattern from
+      ``missing_flag_shift`` days ahead.
+
+    Regardless of how the synthetic clouds are generated, each pixel ends up
+    with at most one cloud type: synthetic clouds are only applied to real
+    ocean observations, so a pixel that is already land or under a real cloud
+    (``unavailable_flag=1``) keeps that state and ``estimate_flag`` never
+    overlaps ``unavailable_flag`` or ``land_flag``.
 
     ``mode="gapfill"`` produces inference inputs for gap-filling. No synthetic
     clouds are created: ``observed_target`` is the real observed data,
@@ -690,12 +957,25 @@ def prepare_model_data(
             gridder = full.gridder
         if verbose is None:
             verbose = full.verbose
+        if cloud_seed is None:
+            cloud_seed = (
+                full.data.cloud_seed
+                if full.data.cloud_seed is not None
+                else full.resolved_seed()
+            )
         options = full.data
 
     if verbose is None:
         verbose = False
 
     std_vars_supplied = std_vars is not None
+    # Synthetic-cloud configuration is canonical on options.data (never a call
+    # argument); fall back to the DataOptions defaults when options is omitted.
+    cloud_mode = "synthetic_bank"
+    coverage = 0.4
+    blob_sigma = 6.0
+    time_sigma = 2.0
+    missing_flag_shift = 10
     if options is not None:
         target_variable = (
             target_variable
@@ -714,13 +994,13 @@ def prepare_model_data(
             n_temporal_lags = options.n_temporal_lags
         if add_geo is None:
             add_geo = options.add_geo
-
-    if gridder is not None and output_chunks is None:
-        output_chunks = {
-            "time": gridder.time_chunk,
-            "lat": gridder.tile_size[0],
-            "lon": gridder.tile_size[1],
-        }
+        cloud_mode = options.cloud_mode
+        coverage = options.cloud_coverage
+        blob_sigma = options.cloud_blob_sigma
+        time_sigma = options.cloud_time_sigma
+        missing_flag_shift = options.missing_flag_shift
+        if cloud_seed is None:
+            cloud_seed = options.cloud_seed
 
     if target_variable is None or missing_flag is None or land_flag is None:
         raise ValueError(
@@ -748,6 +1028,42 @@ def prepare_model_data(
     # downsampling factor; this used to be a separate caller step.
     ds = crop_to_multiple(ds, multiple=unet_spatial_multiple())
 
+    # Pick the dask chunking used throughout the rest of the function so the
+    # lazy graph stays small *and* aligns with how ``ds_std`` is consumed.
+    #
+    # The incoming store's chunks are outside our control and are often the
+    # worst case for us -- e.g. one time step per chunk (``(1, lat, lon)``).
+    # Building the temporal lags, broadcasts, and where-masks on that finest
+    # chunking explodes the lazy Dask graph to millions of tasks for multi-year
+    # records, which is slow and memory hungry even though nothing is computed
+    # yet.
+    #
+    # Downstream, ``make_generator`` tiles ``ds_std`` with xbatcher over
+    # ``gridder.time_chunk`` x ``gridder.tile_size`` windows and the
+    # gap-fill/viz paths pull whole spatial frames for a block of time steps. If
+    # the field fits comfortably as a single spatial block (the common case, and
+    # ``tile_size="full"``), a "full spatial extent, coarse time" chunking is
+    # ideal: one chunk per time block, cheap graph, and every consumer reads a
+    # single chunk. For very large fields that xbatcher must tile spatially, we
+    # instead align the dask chunks with the tile size so each xbatcher patch
+    # maps onto one (or a few) chunks rather than slicing into a huge full-field
+    # chunk. This ``output_chunks`` is reused for the final chunking so the
+    # dataset is not rechunked twice.
+    is_dask = any(
+        getattr(ds[name].data, "__dask_graph__", None) is not None
+        for name in required
+        if name in ds
+    )
+    if output_chunks is None:
+        output_chunks = _resolve_chunks(ds, gridder)
+    if is_dask:
+        chunk_spec = {
+            dim: size
+            for dim, size in output_chunks.items()
+            if dim in ds.dims
+        }
+        ds = ds.chunk(chunk_spec)
+
     processed = ds[required].rename({target_variable: "full_target"})
     for flag in (missing_flag, land_flag):
         processed[flag] = processed[flag].broadcast_like(
@@ -760,29 +1076,125 @@ def prepare_model_data(
 
     processed["land_flag"] = (processed[land_flag] == 1).astype("int8")
     if mode == "train":
-        # Self-supervised training: punch temporally-shifted synthetic gaps into
-        # the observed data. The hidden pixels become estimate_flag=1 (their true
-        # value is known and supplies the learning signal); real clouds become
+        # Self-supervised training: punch synthetic gaps into the observed data.
+        # The hidden pixels become estimate_flag=1 (their true value is known
+        # and supplies the learning signal); real clouds become
         # unavailable_flag=1.
-        shifted_missing = processed[missing_flag].roll(
-            time=-missing_flag_shift,
-            roll_coords=False,
-        )
-        processed["observed_target"] = processed["full_target"].where(
-            shifted_missing != 0
-        )
         processed["unavailable_flag"] = (processed[missing_flag] == 1).astype(
             "int8"
+        )
+        # Pixels that are real ocean observations and therefore eligible to be
+        # hidden by a synthetic cloud: there must be a true value to learn from,
+        # and the pixel must not already carry another cloud type. Applying this
+        # single mask to the synthetic clouds below guarantees each pixel has at
+        # most one cloud flag (a real cloud always wins over a synthetic one).
+        eligible = (
+            (processed[missing_flag] == 0)
+            & (processed["land_flag"] == 0)
+            & processed["full_target"].notnull()
+        )
+        bank_provenance = None
+        if cloud_mode in ("synthetic_bank", "synthetic"):
+            rng = np.random.default_rng(cloud_seed)
+            n_t = processed.sizes["time"]
+            n_la = processed.sizes["lat"]
+            n_lo = processed.sizes["lon"]
+            time_chunk = processed["full_target"].chunksizes.get(
+                "time", (n_t,)
+            )[0]
+
+            cube = None
+            if cloud_mode == "synthetic_bank":
+                # Draw clouds from a precomputed bank: cheap and memory-bounded
+                # regardless of record length. Fall back to on-the-fly
+                # generation when no matching bank is published.
+                from . import cloud_bank as _cb
+
+                entry = _cb.find_bank_entry(
+                    coverage=coverage,
+                    blob_sigma=blob_sigma,
+                    time_sigma=time_sigma,
+                )
+                if entry is None:
+                    warnings.warn(
+                        "cloud_mode='synthetic_bank' but no cloud bank matches "
+                        f"coverage={coverage}, blob_sigma={blob_sigma}, "
+                        f"time_sigma={time_sigma}; falling back to on-the-fly "
+                        "synthetic cloud generation.",
+                        RuntimeWarning,
+                    )
+                else:
+                    try:
+                        bank_path = _cb.fetch_bank(entry)
+                        bank = _cb.open_bank(bank_path, chunk_time=time_chunk)
+                        cube = _bank_to_cube(
+                            bank,
+                            n_t,
+                            n_la,
+                            n_lo,
+                            time_chunk=time_chunk,
+                            rng=rng,
+                        )
+                        bank_provenance = {
+                            "cloud_bank_file": entry["filename"],
+                            "cloud_bank_sha256": entry.get("sha256"),
+                        }
+                    except Exception as exc:
+                        warnings.warn(
+                            "Failed to load cloud bank "
+                            f"{entry['filename']!r} ({exc}); falling back to "
+                            "on-the-fly synthetic cloud generation.",
+                            RuntimeWarning,
+                        )
+                        cube = None
+
+            if cube is None:
+                # On-the-fly generation (the original cloud_mode="synthetic"
+                # path): smooth the full field once. This materialises an
+                # (n_time, n_lat, n_lon) cube in memory and scales with the
+                # length of the record -- use cloud_mode="synthetic_bank" for
+                # large, multi-year records.
+                cube = synthetic_cloud_cube(
+                    n_t,
+                    n_la,
+                    n_lo,
+                    coverage=coverage,
+                    blob_sigma=blob_sigma,
+                    time_sigma=time_sigma,
+                    rng=rng,
+                )
+            synthetic_cloud = xr.DataArray(
+                cube,
+                dims=("time", "lat", "lon"),
+                coords={
+                    "time": processed["time"],
+                    "lat": processed["lat"],
+                    "lon": processed["lon"],
+                },
+            )
+            estimate = synthetic_cloud
+        else:
+            # Historical behaviour: borrow the real cloud pattern from
+            # ``missing_flag_shift`` time steps ahead and hide those pixels.
+            shifted_missing = processed[missing_flag].roll(
+                time=-missing_flag_shift,
+                roll_coords=False,
+            )
+            estimate = shifted_missing == 0
+        # Each pixel gets at most one cloud type. However the synthetic clouds
+        # were created above, restrict them to pixels that are real ocean
+        # observations (a known truth to learn from): drop any that fall on
+        # land, on a real cloud (unavailable_flag), or on an already-missing
+        # value. This guarantees estimate_flag and unavailable_flag never
+        # overlap -- a pixel under a real cloud stays real, not synthetic.
+        estimate = estimate & eligible
+        processed["estimate_flag"] = estimate.astype("int8")
+        processed["observed_target"] = processed["full_target"].where(
+            ~estimate
         )
         processed["observed_flag"] = processed[
             "observed_target"
         ].notnull().astype("int8")
-        processed["estimate_flag"] = (
-            (shifted_missing == 0)
-            & (processed["land_flag"] == 0)
-            & (processed["unavailable_flag"] == 0)
-            & processed["full_target"].notnull()
-        ).astype("int8")
     else:
         # Gap-filling: no synthetic clouds. The observed target is the real
         # observed data (missing values are already NaN and become 0 later). Real
@@ -887,7 +1299,11 @@ def prepare_model_data(
             "land_flag",
         ]
     )
-    chunks = output_chunks or {"time": 100, "lat": -1, "lon": -1}
+    chunks = {
+        dim: size
+        for dim, size in output_chunks.items()
+        if dim in standardized.dims
+    }
     output = standardized[output_vars].chunk(chunks)
     stats = {
         name: np.array(
@@ -916,7 +1332,21 @@ def prepare_model_data(
             "target": "natural logarithm" if log_target else "none",
             "temporal_lags": n_temporal_lags,
             "add_geo": bool(add_geo),
+            "cloud_mode": cloud_mode,
+            "cloud_seed": cloud_seed,
         }
+        if cloud_mode in ("synthetic_bank", "synthetic"):
+            options.transforms.update(
+                {
+                    "cloud_coverage": coverage,
+                    "cloud_blob_sigma": blob_sigma,
+                    "cloud_time_sigma": time_sigma,
+                }
+            )
+            if bank_provenance:
+                options.transforms.update(bank_provenance)
+        else:
+            options.transforms["missing_flag_shift"] = missing_flag_shift
         options.standardization = {
             name: {
                 "mean": float(means[name]),

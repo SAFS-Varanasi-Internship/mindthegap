@@ -3,6 +3,7 @@ from .data import (
     demo_data,
     crop_to_multiple,
     prepare_model_data,
+    synthetic_cloud_cube,
     train_validation_dates,
 )
 from .evaluation import (
@@ -31,6 +32,7 @@ from .options import (
     FitOptions,
     SplitOptions,
 )
+from . import cloud_bank
 # Expose the viz module as a submodule (lazy import by users)
 from . import viz  # users can do: from mindthegap import viz; viz.plot_prediction_observed(...)
 
@@ -42,6 +44,7 @@ __all__ = [
     "compute_mse",
     "make_tf_gen",
     "prepare_model_data",
+    "synthetic_cloud_cube",
     "make_xbatcher",
     "unet_spatial_multiple",
     "make_generator",
@@ -58,5 +61,6 @@ __all__ = [
     "GridderOptions",
     "FitOptions",
     "SplitOptions",
+    "cloud_bank",
     "viz",
 ]
