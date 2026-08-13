@@ -5,13 +5,13 @@ from mindthegap import (
     GridderOptions,
     Options,
     SplitOptions,
-    demo_data,
     train_validation_dates,
 )
+from conftest import make_demo_ds
 
 
 def test_gridder_resolve_infers_tile_and_time_chunk():
-    ds, _ = demo_data(days=60, lat_size=40, lon_size=40, seed=1)
+    ds, _ = make_demo_ds(days=60, lat_size=40, lon_size=40, seed=1)
 
     gridder = GridderOptions().resolve_for(ds)
 
@@ -20,7 +20,7 @@ def test_gridder_resolve_infers_tile_and_time_chunk():
 
 
 def test_gridder_resolve_caps_and_aligns_tile():
-    ds, _ = demo_data(days=30, lat_size=100, lon_size=100, seed=1)
+    ds, _ = make_demo_ds(days=30, lat_size=100, lon_size=100, seed=1)
 
     gridder = GridderOptions(tile_upper_limit=70, tile_multiple=8).resolve_for(ds)
 
@@ -28,7 +28,7 @@ def test_gridder_resolve_caps_and_aligns_tile():
 
 
 def test_gridder_resolve_large_cap_defaults_to_whole_grid():
-    ds, _ = demo_data(days=30, lat_size=100, lon_size=100, seed=1)
+    ds, _ = make_demo_ds(days=30, lat_size=100, lon_size=100, seed=1)
 
     gridder = GridderOptions(tile_upper_limit=10000).resolve_for(ds)
 
@@ -36,7 +36,7 @@ def test_gridder_resolve_large_cap_defaults_to_whole_grid():
 
 
 def test_gridder_resolve_full_uses_whole_field():
-    ds, _ = demo_data(days=30, lat_size=40, lon_size=88, seed=1)
+    ds, _ = make_demo_ds(days=30, lat_size=40, lon_size=88, seed=1)
 
     gridder = GridderOptions(tile_size="full").resolve_for(ds)
 
@@ -44,7 +44,7 @@ def test_gridder_resolve_full_uses_whole_field():
 
 
 def test_gridder_full_survives_serialization_round_trip():
-    ds, _ = demo_data(days=30, lat_size=40, lon_size=88, seed=1)
+    ds, _ = make_demo_ds(days=30, lat_size=40, lon_size=88, seed=1)
     from mindthegap.options import _to_plain
 
     plain = _to_plain(GridderOptions(tile_size="full"))
@@ -75,7 +75,7 @@ def test_split_defaults():
 
 
 def test_train_validation_dates_random_populates_split():
-    ds, metadata = demo_data(days=100, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = make_demo_ds(days=100, lat_size=8, lon_size=8, seed=2)
     options = Options.default(data=ds, metadata=metadata)
 
     result = train_validation_dates(ds.time, options, method="random", seed=7)
@@ -90,7 +90,7 @@ def test_train_validation_dates_random_populates_split():
 
 
 def test_train_validation_dates_random_limits_total_days():
-    ds, metadata = demo_data(days=100, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = make_demo_ds(days=100, lat_size=8, lon_size=8, seed=2)
     options = Options.default(data=ds, metadata=metadata)
 
     train_validation_dates(ds.time, options, n_days=50, seed=7)
@@ -101,7 +101,7 @@ def test_train_validation_dates_random_limits_total_days():
 
 
 def test_train_validation_dates_random_reads_n_days_from_options():
-    ds, metadata = demo_data(days=100, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = make_demo_ds(days=100, lat_size=8, lon_size=8, seed=2)
     options = Options.default(data=ds, metadata=metadata)
     options.split.n_days = 25
 
@@ -112,7 +112,7 @@ def test_train_validation_dates_random_reads_n_days_from_options():
 
 
 def test_train_validation_dates_caps_n_days_at_available_dates():
-    ds, metadata = demo_data(days=20, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = make_demo_ds(days=20, lat_size=8, lon_size=8, seed=2)
     options = Options.default(data=ds, metadata=metadata)
 
     train_validation_dates(ds.time, options, n_days=100, seed=7)
@@ -122,7 +122,7 @@ def test_train_validation_dates_caps_n_days_at_available_dates():
 
 
 def test_train_validation_dates_random_is_deterministic():
-    ds, metadata = demo_data(days=60, lat_size=8, lon_size=8, seed=3)
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=3)
 
     a = train_validation_dates(
         ds.time, Options.default(data=ds, metadata=metadata), method="random", seed=5
@@ -136,7 +136,7 @@ def test_train_validation_dates_random_is_deterministic():
 
 
 def test_train_validation_dates_manual_selects_windows():
-    ds, metadata = demo_data(days=120, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = make_demo_ds(days=120, lat_size=8, lon_size=8, seed=2)
     options = Options.default(data=ds, metadata=metadata)
 
     train_validation_dates(
@@ -154,7 +154,7 @@ def test_train_validation_dates_manual_selects_windows():
 
 
 def test_train_validation_dates_manual_errors_on_empty_slice():
-    ds, metadata = demo_data(days=60, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
 
     with pytest.raises(ValueError, match="selects no dates"):
         train_validation_dates(
@@ -167,7 +167,7 @@ def test_train_validation_dates_manual_errors_on_empty_slice():
 
 
 def test_train_validation_dates_rejects_unknown_method():
-    ds, metadata = demo_data(days=30, lat_size=8, lon_size=8, seed=2)
+    ds, metadata = make_demo_ds(days=30, lat_size=8, lon_size=8, seed=2)
 
     with pytest.raises(ValueError, match="Unknown method"):
         train_validation_dates(
@@ -182,7 +182,7 @@ def test_split_rejects_invalid_n_days(n_days):
 
 
 def test_set_config_resolves_gridder_and_fit_not_split():
-    ds, _ = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
+    ds, _ = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default()
 
     result = options.set_config(ds)
@@ -193,7 +193,7 @@ def test_set_config_resolves_gridder_and_fit_not_split():
 
 
 def test_set_data_config_populates_data_from_metadata():
-    ds, metadata = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
+    ds, metadata = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default()
 
     result = options.set_data_config(data=ds, metadata=metadata)
@@ -210,7 +210,7 @@ def test_set_data_config_populates_data_from_metadata():
 
 
 def test_default_with_data_resolves_configuration():
-    ds, metadata = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
+    ds, metadata = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
 
     options = Options.default(data=ds, metadata=metadata)
 
@@ -223,7 +223,7 @@ def test_data_options_log_target_defaults_false():
 
 
 def test_prepare_model_data_reads_config_from_options():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata, seed=1)
     options.data.log_target = False
     options.data.n_temporal_lags = 2
@@ -242,7 +242,7 @@ def test_prepare_model_data_reads_config_from_options():
 
 
 def test_prepare_model_data_defaults_output_chunks_from_gridder():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
@@ -255,7 +255,7 @@ def test_prepare_model_data_defaults_output_chunks_from_gridder():
 
 
 def test_smoke_test_caps_epochs():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
 
     options = Options.default(data=ds, metadata=metadata, smoke_test=True)
 
@@ -264,7 +264,7 @@ def test_smoke_test_caps_epochs():
 
 
 def test_options_verbose_default_true_and_roundtrips():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
 
     assert options.verbose is True
@@ -273,7 +273,7 @@ def test_options_verbose_default_true_and_roundtrips():
 
 
 def test_prepare_model_data_accepts_full_options():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.verbose = False
     train_validation_dates(ds.time, options, seed=1, verbose=False)
@@ -288,7 +288,7 @@ def test_prepare_model_data_accepts_full_options():
 
 
 def test_prepare_model_data_errors_when_split_unset():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
 
     from mindthegap import prepare_model_data
@@ -298,7 +298,7 @@ def test_prepare_model_data_errors_when_split_unset():
 
 
 def test_prepare_model_data_errors_on_inconsistent_split():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.split.train_dates = ["1990-01-01"]
     options.split.val_dates = ["1990-01-02"]
@@ -310,7 +310,7 @@ def test_prepare_model_data_errors_on_inconsistent_split():
 
 
 def test_prepare_model_data_reads_add_geo_from_options():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.data.add_geo = True
     options.verbose = False
@@ -326,7 +326,7 @@ def test_prepare_model_data_reads_add_geo_from_options():
 
 
 def test_config_roundtrips_through_dict():
-    ds, metadata = demo_data(days=120, lat_size=16, lon_size=16, seed=42)
+    ds, metadata = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default(data=ds, metadata=metadata)
     train_validation_dates(ds.time, options, method="random", seed=1)
 
@@ -334,7 +334,7 @@ def test_config_roundtrips_through_dict():
 
 
 def test_train_validation_dates_accepts_full_options():
-    ds, metadata = demo_data(days=60, lat_size=16, lon_size=16, seed=2)
+    ds, metadata = make_demo_ds(days=60, lat_size=16, lon_size=16, seed=2)
     options = Options.default(data=ds, metadata=metadata, seed=42)
 
     result = train_validation_dates(ds.time, options, method="random")

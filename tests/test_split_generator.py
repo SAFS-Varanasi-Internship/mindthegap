@@ -6,14 +6,14 @@ from mindthegap import (
     Options,
     SplitOptions,
     prepare_model_data,
-    demo_data,
     make_generator,
     train_validation_dates,
 )
+from conftest import make_demo_ds
 
 
 def _prepared(days=60, seed=3):
-    ds, metadata = demo_data(days=days, lat_size=16, lon_size=16, seed=seed)
+    ds, metadata = make_demo_ds(days=days, lat_size=16, lon_size=16, seed=seed)
     options = Options.default(data=ds, metadata=metadata)
     train_validation_dates(ds.time, options, seed=seed, verbose=False)
     ds_std, _ = prepare_model_data(ds, options, mode="train")
@@ -21,7 +21,7 @@ def _prepared(days=60, seed=3):
 
 
 def test_split_starts_unresolved_after_set_config():
-    ds, metadata = demo_data(days=60, lat_size=16, lon_size=16, seed=1)
+    ds, metadata = make_demo_ds(days=60, lat_size=16, lon_size=16, seed=1)
     options = Options.default(data=ds, metadata=metadata)
 
     assert options.split.is_resolved() is False
@@ -95,7 +95,7 @@ def test_train_validation_dates_manual_empty_slice_errors():
 
 
 def test_make_generator_requires_resolved_split():
-    ds, metadata = demo_data(days=60, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=60, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     train_validation_dates(ds.time, options, seed=3, verbose=False)
     ds_std, _ = prepare_model_data(ds, options, mode="train")
@@ -131,7 +131,7 @@ def test_make_generator_returns_datasets_and_steps():
 
 
 def test_prepare_model_data_defaults_chunks_from_gridder():
-    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=2)
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=2)
     options = Options.default(data=ds, metadata=metadata)
     train_validation_dates(ds.time, options, seed=2, verbose=False)
 
@@ -144,7 +144,7 @@ def test_prepare_model_data_train_returns_only_fit_dates():
     # mode="train" should return just the dates needed for fitting (train + val
     # from options.split), not every date in ds. n_days caps the split so extra
     # dates exist in ds that must be dropped.
-    ds, metadata = demo_data(days=60, lat_size=16, lon_size=16, seed=2)
+    ds, metadata = make_demo_ds(days=60, lat_size=16, lon_size=16, seed=2)
     options = Options.default(data=ds, metadata=metadata, seed=2)
     options.split.n_days = 20
     train_validation_dates(ds.time, options, seed=2, verbose=False)

@@ -7,10 +7,10 @@ import xarray as xr
 from mindthegap.data import (
     _bank_to_cube,
     prepare_model_data,
-    demo_data,
 )
 from mindthegap import cloud_bank as cb
 from mindthegap import Options, train_validation_dates
+from conftest import make_demo_ds
 
 
 def _full_options(ds, metadata, *, seed=1, **cloud_kwargs):
@@ -158,7 +158,7 @@ def test_bank_to_cube_preserves_temporal_correlation(tmp_path):
 
 
 def test_prepare_model_data_bank_falls_back_when_no_match():
-    ds, metadata = demo_data(days=16, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=16, lat_size=16, lon_size=16, seed=3)
     options = _full_options(
         ds,
         metadata,
@@ -201,7 +201,7 @@ def test_prepare_model_data_bank_uses_cache(tmp_path, monkeypatch):
     }
     monkeypatch.setattr(cb, "load_manifest", lambda: manifest)
 
-    ds, metadata = demo_data(days=16, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = make_demo_ds(days=16, lat_size=16, lon_size=16, seed=3)
     options = _full_options(
         ds,
         metadata,

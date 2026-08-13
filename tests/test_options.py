@@ -7,9 +7,9 @@ from mindthegap import (
     GridderOptions,
     Options,
     prepare_model_data,
-    demo_data,
     make_xbatcher,
 )
+from conftest import make_demo_ds
 
 
 def test_default_options_are_valid():
@@ -85,7 +85,7 @@ def test_data_options_from_dict_ignores_unknown_keys():
 
 
 def test_prepare_model_data_populates_data_options():
-    ds, metadata = demo_data(days=12, lat_size=8, lon_size=8, seed=5)
+    ds, metadata = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=5)
     options = Options.default(data=ds, metadata=metadata, seed=1)
     options.data.log_target = True
     from mindthegap import train_validation_dates
@@ -107,7 +107,7 @@ def test_prepare_model_data_populates_data_options():
 
 
 def test_make_xbatcher_accepts_gridder_options():
-    ds, metadata = demo_data(days=12, lat_size=16, lon_size=16, seed=1)
+    ds, metadata = make_demo_ds(days=12, lat_size=16, lon_size=16, seed=1)
     options = Options.default(data=ds, metadata=metadata, seed=1)
     from mindthegap import train_validation_dates
 
@@ -125,6 +125,6 @@ def test_make_xbatcher_accepts_gridder_options():
 
 
 def test_make_xbatcher_requires_config():
-    ds, _ = demo_data(days=4, lat_size=8, lon_size=8, seed=2)
+    ds, _ = make_demo_ds(days=4, lat_size=8, lon_size=8, seed=2)
     with pytest.raises(ValueError, match="patch_dims or options"):
         make_xbatcher(ds)
