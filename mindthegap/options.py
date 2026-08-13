@@ -336,7 +336,7 @@ class DataOptions:
     target_mean: Optional[float] = None
     target_std: Optional[float] = None
     missing_value_handling: Optional[str] = None
-    available_period: Optional[str] = None
+    time_bounds: Optional[str] = None
     training_period: Optional[str] = None
     region_name: Optional[str] = None
     data_source: str = "user manual"
@@ -407,7 +407,7 @@ class DataOptions:
             float(ds["lon"].min()),
             float(ds["lon"].max()),
         )
-        self.available_period = (
+        self.time_bounds = (
             f"{pd.to_datetime(ds.time.values[0]).date()} to "
             f"{pd.to_datetime(ds.time.values[-1]).date()}"
         )
@@ -430,7 +430,7 @@ class DataOptions:
 
         self.source = dataset_info.get("name")
         self.product_id = dataset_info.get("product_id")
-        self.available_period = dataset_info.get("available_period")
+        self.time_bounds = dataset_info.get("available_period")
         self.data_source = dataset_info.get("data_source", "user manual")
         if "region_name" in dataset_info:
             self.region_name = dataset_info["region_name"]

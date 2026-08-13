@@ -139,10 +139,10 @@ def demo_data(
 
     if options.verbose:
         print(f"Dataset: {ds.attrs['dataset_name']}")
-        print(f"  target:           {options.data.target_variable}")
-        print(f"  lat_bounds:       {options.data.lat_bounds}")
-        print(f"  lon_bounds:       {options.data.lon_bounds}")
-        print(f"  available_period: {options.data.available_period}")
+        print(f"  target:      {options.data.target_variable}")
+        print(f"  lat_bounds:  {options.data.lat_bounds}")
+        print(f"  lon_bounds:  {options.data.lon_bounds}")
+        print(f"  time_bounds: {options.data.time_bounds}")
 
     return ds
 
