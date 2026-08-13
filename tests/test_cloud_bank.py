@@ -170,7 +170,7 @@ def test_prepare_model_data_bank_falls_back_when_no_match():
         cloud_seed=1,
     )
     with pytest.warns(RuntimeWarning):
-        standardized, _ = prepare_model_data(ds, options, mode="train")
+        standardized = prepare_model_data(ds, options, mode="train")
     # Fallback still produces synthetic clouds over real ocean.
     estimate = standardized["estimate_flag"].values == 1
     assert estimate.any()
@@ -211,7 +211,7 @@ def test_prepare_model_data_bank_uses_cache(tmp_path, monkeypatch):
         cloud_time_sigma=2.0,
         cloud_seed=1,
     )
-    standardized, _ = prepare_model_data(ds, options, mode="train")
+    standardized = prepare_model_data(ds, options, mode="train")
     estimate = standardized["estimate_flag"].values == 1
     land = standardized["land_flag"].values == 1
     unavailable = standardized["unavailable_flag"].values == 1

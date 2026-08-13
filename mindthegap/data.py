@@ -829,7 +829,11 @@ def prepare_model_data(ds, options, mode):
     inputs match training exactly; the whole passed-in ``ds`` is used and the
     split is not consulted.
 
-    Returns ``(output, stats)``.
+    Returns the standardized ``output`` dataset. In ``mode="train"`` the
+    standardization statistics (and all other resolved settings) are written to
+    ``options.data`` -- ``options.data.standardization``,
+    ``options.data.target_mean``, and ``options.data.target_std`` -- rather than
+    returned separately, so ``options`` remains the single source of truth.
     """
     from .options import Options as _Options
 
@@ -1285,13 +1289,6 @@ def prepare_model_data(ds, options, mode):
         # their true neighbours even when those neighbours are dropped here.
         # make_generator later splits this back into train/val via options.split.
         output = output.sel(time=fit_dates)
-    stats = {
-        name: np.array(
-            [means[name], standard_deviations[name]],
-            dtype=np.float32,
-        )
-        for name in standardizable_vars
-    }
 
     if mode == "train":
         input_names = [name for name in output_vars if name != "full_target"]
@@ -1358,7 +1355,7 @@ def prepare_model_data(ds, options, mode):
         )
         print(f"Dataset is LAZY (not in memory): {output.chunks}")
 
-    return output, stats
+    return output
 
 
 def _random_train_val_indices(

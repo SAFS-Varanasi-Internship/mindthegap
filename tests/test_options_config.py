@@ -232,13 +232,14 @@ def test_prepare_model_data_reads_config_from_options():
 
     from mindthegap import prepare_model_data
 
-    _, stats = prepare_model_data(ds, options, mode="train")
+    prepare_model_data(ds, options, mode="train")
 
     assert options.data.is_resolved()
     assert options.data.transforms["temporal_lags"] == 2
     assert options.data.transforms["target"] == "none"
-    assert options.data.target_mean == float(stats["full_target"][0])
-    assert options.data.target_std == float(stats["full_target"][1])
+    std_map = options.data.standardization
+    assert options.data.target_mean == float(std_map["full_target"]["mean"])
+    assert options.data.target_std == float(std_map["full_target"]["std"])
 
 
 def test_prepare_model_data_defaults_output_chunks_from_gridder():
@@ -248,7 +249,7 @@ def test_prepare_model_data_defaults_output_chunks_from_gridder():
 
     from mindthegap import prepare_model_data
 
-    output, _ = prepare_model_data(ds, options, mode="train")
+    output = prepare_model_data(ds, options, mode="train")
 
     time_chunk = options.gridder.time_chunk
     assert output.chunks["time"][0] == time_chunk
@@ -280,7 +281,7 @@ def test_prepare_model_data_accepts_full_options():
 
     from mindthegap import prepare_model_data
 
-    output, _ = prepare_model_data(ds, options, mode="train")
+    output = prepare_model_data(ds, options, mode="train")
 
     # train_dates and chunks come from options.split / options.gridder
     assert output.chunks["time"][0] == options.gridder.time_chunk

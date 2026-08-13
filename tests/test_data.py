@@ -78,7 +78,7 @@ def test_prepare_model_data_broadcasts_static_land_mask():
     ds["land_flag"] = ds["land_flag"].isel(time=0, drop=True)
     options = _full_options(ds, metadata)
 
-    standardized, _ = prepare_model_data(ds, options, mode="train")
+    standardized = prepare_model_data(ds, options, mode="train")
 
     assert standardized["land_flag"].dims == ("time", "lat", "lon")
     xr.testing.assert_equal(
@@ -97,7 +97,7 @@ def test_prepare_model_data_crops_to_unet_multiple():
     )
     options = _full_options(ds, metadata)
 
-    standardized, _ = prepare_model_data(ds, options, mode="train")
+    standardized = prepare_model_data(ds, options, mode="train")
 
     assert standardized.sizes["lat"] % multiple == 0
     assert standardized.sizes["lon"] % multiple == 0
@@ -125,7 +125,7 @@ def test_prepare_model_data_synthetic_clouds_hide_observed_ocean():
     ds, metadata = make_demo_ds(days=20, lat_size=16, lon_size=16, seed=3)
     options = _full_options(ds, metadata, cloud_mode="synthetic", cloud_seed=1)
 
-    standardized, _ = prepare_model_data(ds, options, mode="train")
+    standardized = prepare_model_data(ds, options, mode="train")
 
     estimate = standardized["estimate_flag"].values == 1
     land = standardized["land_flag"].values == 1
@@ -148,7 +148,7 @@ def test_prepare_model_data_synthetic_clouds_are_reproducible():
         options = _full_options(
             ds, metadata, cloud_mode="synthetic", cloud_seed=cloud_seed
         )
-        out, _ = prepare_model_data(ds, options, mode="train")
+        out = prepare_model_data(ds, options, mode="train")
         return out
 
     a = run(42)
@@ -169,7 +169,7 @@ def test_prepare_model_data_shift_cloud_mode_uses_future_clouds():
         ds, metadata, cloud_mode="shift", missing_flag_shift=5
     )
 
-    standardized, _ = prepare_model_data(ds, options, mode="train")
+    standardized = prepare_model_data(ds, options, mode="train")
 
     estimate = standardized["estimate_flag"].values == 1
     land = standardized["land_flag"].values == 1
@@ -192,7 +192,7 @@ def test_prepare_model_data_flags_are_mutually_exclusive(cloud_kwargs):
     ds, metadata = make_demo_ds(days=20, lat_size=16, lon_size=16, seed=3)
     options = _full_options(ds, metadata, **cloud_kwargs)
 
-    standardized, _ = prepare_model_data(ds, options, mode="train")
+    standardized = prepare_model_data(ds, options, mode="train")
 
     estimate = standardized["estimate_flag"].values == 1
     unavailable = standardized["unavailable_flag"].values == 1
@@ -216,7 +216,7 @@ def test_prepare_model_data_test_mode_reuses_stats_and_adds_clouds():
     recorded = dict(options.data.standardization)
     target_mean_before = options.data.target_mean
 
-    test_out, _ = prepare_model_data(ds, options, mode="test")
+    test_out = prepare_model_data(ds, options, mode="test")
 
     # Synthetic clouds + flags are present, over the whole record.
     assert (test_out["estimate_flag"].values == 1).any()
@@ -268,7 +268,7 @@ def test_prepare_model_data_std_target_shares_one_scale():
         ds, metadata, cloud_mode="shift", std_target=True, n_temporal_lags=1
     )
 
-    _, stats = prepare_model_data(ds, options, mode="train")
+    prepare_model_data(ds, options, mode="train")
 
     std_map = options.data.standardization
     assert std_map["full_target"]["applied"]
@@ -304,7 +304,7 @@ def test_prepare_model_data_std_target_stats_from_train_dates_only():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=7)
     options = _full_options(ds, metadata, cloud_mode="shift", std_target=True)
 
-    prepared, _ = prepare_model_data(ds, options, mode="train")
+    prepared = prepare_model_data(ds, options, mode="train")
 
     # observed_target over the training dates should have ~zero mean / unit std
     # after standardization, because the target stats were fit on exactly that
@@ -371,7 +371,7 @@ def test_prepare_model_data_std_target_reused_in_test_mode():
     prepare_model_data(ds, options, mode="train")
     recorded_std = options.data.standardization["full_target"]["std"]
 
-    test_out, _ = prepare_model_data(ds, options, mode="test")
+    test_out = prepare_model_data(ds, options, mode="test")
 
     # The standardized full_target in test mode has ~unit spread (it was scaled
     # by the recorded std), confirming the recorded stats were applied.

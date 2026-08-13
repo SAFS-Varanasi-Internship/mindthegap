@@ -92,14 +92,14 @@ def test_prepare_model_data_populates_data_options():
 
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
-    output, stats = prepare_model_data(ds, options, mode="train")
+    output = prepare_model_data(ds, options, mode="train")
 
     assert options.data.is_resolved()
     assert options.data.target == "full_target"
     assert "observed_target" in options.data.input_names
     assert "full_target" not in options.data.input_names
     assert options.data.transforms["target"] == "natural logarithm"
-    assert set(options.data.standardization) == set(stats)
+    assert "full_target" in options.data.standardization
     assert options.data.lat_bounds[0] <= options.data.lat_bounds[1]
 
     restored = Options.from_dict(options.to_dict())
@@ -112,7 +112,7 @@ def test_make_xbatcher_accepts_gridder_options():
     from mindthegap import train_validation_dates
 
     train_validation_dates(ds.time, options, seed=1, verbose=False)
-    output, _ = prepare_model_data(ds, options, mode="train")
+    output = prepare_model_data(ds, options, mode="train")
     gridder = GridderOptions(tile_size=(8, 8), time_chunk=4)
 
     from_options = make_xbatcher(output, options=gridder)

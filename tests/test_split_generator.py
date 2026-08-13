@@ -16,7 +16,7 @@ def _prepared(days=60, seed=3):
     ds, metadata = make_demo_ds(days=days, lat_size=16, lon_size=16, seed=seed)
     options = Options.default(data=ds, metadata=metadata)
     train_validation_dates(ds.time, options, seed=seed, verbose=False)
-    ds_std, _ = prepare_model_data(ds, options, mode="train")
+    ds_std = prepare_model_data(ds, options, mode="train")
     return ds, ds_std, options
 
 
@@ -98,7 +98,7 @@ def test_make_generator_requires_resolved_split():
     ds, metadata = make_demo_ds(days=60, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     train_validation_dates(ds.time, options, seed=3, verbose=False)
-    ds_std, _ = prepare_model_data(ds, options, mode="train")
+    ds_std = prepare_model_data(ds, options, mode="train")
     # Clear the split so make_generator has no dates to work with.
     options.split.train_dates = []
     options.split.val_dates = []
@@ -135,7 +135,7 @@ def test_prepare_model_data_defaults_chunks_from_gridder():
     options = Options.default(data=ds, metadata=metadata)
     train_validation_dates(ds.time, options, seed=2, verbose=False)
 
-    ds_std, _ = prepare_model_data(ds, options, mode="train")
+    ds_std = prepare_model_data(ds, options, mode="train")
 
     assert ds_std.chunksizes["lat"][0] == options.gridder.tile_size[0]
 
@@ -149,7 +149,7 @@ def test_prepare_model_data_train_returns_only_fit_dates():
     options.split.n_days = 20
     train_validation_dates(ds.time, options, seed=2, verbose=False)
 
-    ds_std, _ = prepare_model_data(ds, options, mode="train")
+    ds_std = prepare_model_data(ds, options, mode="train")
 
     n_train = len(options.split.train_selection())
     n_val = len(options.split.val_selection())
