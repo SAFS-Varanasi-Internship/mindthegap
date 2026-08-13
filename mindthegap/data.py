@@ -840,9 +840,15 @@ def prepare_model_data(ds, options, mode):
     statistics are computed from the training dates in ``options.split`` and
     recorded on ``options.data`` (bounds, input channel names/order, transforms,
     standardization statistics, and target mean/std) so downstream functions and
-    the saved model bundle can reproduce these inputs. How the synthetic clouds
-    are generated is controlled by ``options.data.cloud_mode`` (with the
-    related ``options.data.cloud_coverage`` / ``cloud_blob_sigma`` /
+    the saved model bundle can reproduce these inputs. The returned dataset is
+    subset to just the dates needed for model fitting -- the union of the
+    training and validation dates in ``options.split`` -- rather than every date
+    in ``ds``; :func:`make_generator` later splits it back into train/val via
+    ``options.split``. Temporal lags are still computed from the full time
+    series before subsetting, so the lag channels for the returned days reflect
+    their true neighbours even when those neighbours are dropped. How the
+    synthetic clouds are generated is controlled by ``options.data.cloud_mode``
+    (with the related ``options.data.cloud_coverage`` / ``cloud_blob_sigma`` /
     ``cloud_time_sigma`` / ``missing_flag_shift`` / ``cloud_seed`` fields) --
     the cloud configuration is canonical on ``options`` and is not a call
     argument:
@@ -921,9 +927,11 @@ def prepare_model_data(ds, options, mode):
             "options.set_data_config(data=ds, metadata=...) first"
         )
 
-    # train_dates are only used to compute standardization statistics; test and
-    # gapfill reuse the recorded statistics and standardize the whole ds.
+    # train_dates are used to compute standardization statistics; the returned
+    # dataset is subset to the fitting dates (train + val). test and gapfill
+    # reuse the recorded statistics and standardize the whole ds.
     train_dates = None
+    fit_dates = None
     if mode == "train":
         if not full.split.is_resolved():
             raise ValueError(
@@ -946,6 +954,21 @@ def prepare_model_data(ds, options, mode):
                 "mtg.train_validation_dates on this dataset's ds.time."
             )
         train_dates = split_selection
+        # The returned dataset carries both the training and validation dates
+        # (everything model fitting needs); make_generator later splits it back
+        # into train/val via options.split. Statistics are still computed from
+        # train_dates only below.
+        val_selection = full.split.val_selection()
+        fit_index = pd.to_datetime(
+            np.concatenate(
+                [
+                    np.asarray(pd.to_datetime(split_selection)),
+                    np.asarray(pd.to_datetime(val_selection)),
+                ]
+            )
+        ).unique()
+        # Preserve chronological order to keep the time coordinate monotonic.
+        fit_dates = fit_index.sort_values()
 
     if mode in ("test", "gapfill") and not full.data.standardization:
         raise ValueError(
@@ -1284,6 +1307,13 @@ def prepare_model_data(ds, options, mode):
         if dim in standardized.dims
     }
     output = standardized[output_vars].chunk(chunks)
+    if mode == "train" and fit_dates is not None:
+        # Return only the dates needed for model fitting (training + validation).
+        # Temporal lags were already computed from the full time series above
+        # (via shift), so the lag channels for the returned days still reflect
+        # their true neighbours even when those neighbours are dropped here.
+        # make_generator later splits this back into train/val via options.split.
+        output = output.sel(time=fit_dates)
     stats = {
         name: np.array(
             [means[name], standard_deviations[name]],

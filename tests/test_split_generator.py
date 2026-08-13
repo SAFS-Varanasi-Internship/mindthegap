@@ -140,6 +140,44 @@ def test_prepare_model_data_defaults_chunks_from_gridder():
     assert ds_std.chunksizes["lat"][0] == options.gridder.tile_size[0]
 
 
+def test_prepare_model_data_train_returns_only_fit_dates():
+    # mode="train" should return just the dates needed for fitting (train + val
+    # from options.split), not every date in ds. n_days caps the split so extra
+    # dates exist in ds that must be dropped.
+    ds, metadata = demo_data(days=60, lat_size=16, lon_size=16, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=2)
+    options.split.n_days = 20
+    train_validation_dates(ds.time, options, seed=2, verbose=False)
+
+    ds_std, _ = prepare_model_data(ds, options, mode="train")
+
+    n_train = len(options.split.train_selection())
+    n_val = len(options.split.val_selection())
+    assert ds_std.sizes["time"] == n_train + n_val
+    assert ds_std.sizes["time"] < ds.sizes["time"]
+
+    returned = pd.DatetimeIndex(pd.to_datetime(ds_std.time.values)).normalize()
+    expected = pd.DatetimeIndex(
+        pd.to_datetime(options.split.train_selection())
+        .union(pd.to_datetime(options.split.val_selection()))
+    ).normalize()
+    assert set(returned) == set(expected)
+    # Time coordinate stays chronologically sorted.
+    assert list(returned) == sorted(returned)
+
+
+def test_prepare_model_data_train_output_feeds_make_generator():
+    # The train-mode dataset carries both splits so make_generator can select
+    # train and validation dates from it.
+    ds, ds_std, options = _prepared(days=40, seed=3)
+
+    train_ds, val_ds, train_steps, val_steps = make_generator(
+        ds_std, options, verbose=False
+    )
+    assert train_steps > 0
+    assert val_steps > 0
+
+
 def test_split_roundtrips_through_dict():
     ds, _, options = _prepared()
     train_validation_dates(
