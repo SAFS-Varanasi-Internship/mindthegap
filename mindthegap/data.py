@@ -840,7 +840,21 @@ def prepare_model_data(ds, options, mode):
     statistics are computed from the training dates in ``options.split`` and
     recorded on ``options.data`` (bounds, input channel names/order, transforms,
     standardization statistics, and target mean/std) so downstream functions and
-    the saved model bundle can reproduce these inputs. The returned dataset is
+    the saved model bundle can reproduce these inputs.
+
+    Standardization is opt-in per group. ``options.data.features`` lists only
+    *extra* predictor variables from ``ds`` (never the target or its
+    ``observed_target`` / ``full_target`` variants -- that is rejected).
+    ``options.data.std_features`` selects which of those features are
+    standardized (each with its own statistics computed over the training
+    dates). ``options.data.std_target`` selects whether the target is
+    standardized: when ``True``, a single ``(mean, std)`` is computed from the
+    masked ``observed_target`` over the training dates and applied to
+    ``observed_target``, its temporal lags, and ``full_target`` so the
+    standardized inputs and the training label share one consistent scale;
+    ``target_mean`` / ``target_std`` record it. When ``False`` the target group
+    is left in raw (or log) units and ``target_mean`` / ``target_std`` are 0 / 1.
+    The returned dataset is
     subset to just the dates needed for model fitting -- the union of the
     training and validation dates in ``options.split`` -- rather than every date
     in ``ds``; :func:`make_generator` later splits it back into train/val via
@@ -992,6 +1006,8 @@ def prepare_model_data(ds, options, mode):
     missing_flag = data_options.missing_flag
     land_flag = data_options.land_flag
     features = list(data_options.features or [])
+    std_features = list(data_options.std_features or [])
+    std_target = bool(data_options.std_target)
     log_target = bool(data_options.log_target)
     n_temporal_lags = data_options.n_temporal_lags
     add_geo = bool(data_options.add_geo)
@@ -1015,6 +1031,30 @@ def prepare_model_data(ds, options, mode):
     n_temporal_lags = 1 if n_temporal_lags is None else n_temporal_lags
 
     features = list(features or [])
+    reserved_names = {
+        target_variable,
+        "full_target",
+        "observed_target",
+    }
+    for lag in range(1, (n_temporal_lags or 0) + 1):
+        reserved_names.add(f"observed_target_m{lag}")
+        reserved_names.add(f"observed_target_p{lag}")
+    illegal_features = [name for name in features if name in reserved_names]
+    if illegal_features:
+        raise ValueError(
+            "options.data.features must contain only extra predictor "
+            "variables, never the target or its variants; found "
+            f"{illegal_features}. Use options.data.std_target to standardize "
+            "the target."
+        )
+    unknown_std_features = [
+        name for name in std_features if name not in features
+    ]
+    if unknown_std_features:
+        raise ValueError(
+            "options.data.std_features must be a subset of "
+            f"options.data.features; unknown: {unknown_std_features}"
+        )
     required = [target_variable, *features, missing_flag, land_flag]
     missing = [name for name in required if name not in ds]
     if missing:
@@ -1236,54 +1276,75 @@ def prepare_model_data(ds, options, mode):
                 xr.ones_like(day_of_year).astype("float32") * with_geo[name]
             ).transpose("time", "lat", "lon")
 
-    standardizable_vars = features + ["full_target", "observed_target"]
+    target_group = ["full_target", "observed_target"]
+    lag_vars = []
     for lag in range(1, n_temporal_lags + 1):
         previous = f"observed_target_m{lag}"
         following = f"observed_target_p{lag}"
         processed[previous] = processed["observed_target"].shift(time=lag)
         processed[following] = processed["observed_target"].shift(time=-lag)
-        standardizable_vars.extend([previous, following])
-
-    # Standardization always applies to the feature variables (the target and
-    # its lags are standardized via the recorded target statistics downstream).
-    std_vars = list(features)
-    unknown = sorted(set(std_vars) - set(standardizable_vars))
-    if unknown:
-        raise ValueError(
-            "features contains unknown variables: " + ", ".join(unknown)
-        )
+        lag_vars.extend([previous, following])
+    target_group.extend(lag_vars)
+    standardizable_vars = features + target_group
 
     means = {name: 0.0 for name in standardizable_vars}
     standard_deviations = {name: 1.0 for name in standardizable_vars}
+    # applied_vars tracks which variables actually had standardization applied,
+    # so the recorded ``standardization`` metadata (and test/gapfill reuse) is
+    # exact. Feature standardization is controlled by options.data.std_features;
+    # target standardization by options.data.std_target.
+    applied_vars = []
     if reuse_standardization:
         # test/gapfill: reuse the standardization recorded at training time so
         # inputs match the trained model exactly; never recompute from the data.
         saved = data_options.standardization
-        std_vars = [
-            name
-            for name in standardizable_vars
-            if saved.get(name, {}).get("applied")
-        ]
         for name in standardizable_vars:
             if name in saved:
                 means[name] = float(saved[name].get("mean", 0.0))
                 standard_deviations[name] = float(saved[name].get("std", 1.0))
-    elif std_vars:
-        stats_source = processed[std_vars]
-        if train_dates is not None:
-            stats_source = stats_source.sel(time=train_dates)
-        computed_means = stats_source.mean(
-            dim=("time", "lat", "lon"),
-            skipna=True,
-        ).compute()
-        computed_stds = stats_source.std(
-            dim=("time", "lat", "lon"),
-            skipna=True,
-        ).compute()
-        for name in std_vars:
-            means[name] = float(computed_means[name].item())
-            standard_deviations[name] = float(computed_stds[name].item())
+                if saved[name].get("applied"):
+                    applied_vars.append(name)
+    else:
+        # Feature statistics: each standardized feature uses its own stats,
+        # computed over the training dates.
+        if std_features:
+            feat_source = processed[std_features]
+            if train_dates is not None:
+                feat_source = feat_source.sel(time=train_dates)
+            feat_means = feat_source.mean(
+                dim=("time", "lat", "lon"), skipna=True
+            ).compute()
+            feat_stds = feat_source.std(
+                dim=("time", "lat", "lon"), skipna=True
+            ).compute()
+            for name in std_features:
+                means[name] = float(feat_means[name].item())
+                standard_deviations[name] = float(feat_stds[name].item())
+                applied_vars.append(name)
+        # Target statistics: a single (mean, std) computed from the masked
+        # observed_target over the training dates, then shared by the whole
+        # target group (full_target, observed_target, and the temporal lags) so
+        # the standardized inputs and the training label share one scale.
+        if std_target:
+            tgt_source = processed["observed_target"]
+            if train_dates is not None:
+                tgt_source = tgt_source.sel(time=train_dates)
+            tgt_mean = float(
+                tgt_source.mean(dim=("time", "lat", "lon"), skipna=True)
+                .compute()
+                .item()
+            )
+            tgt_std = float(
+                tgt_source.std(dim=("time", "lat", "lon"), skipna=True)
+                .compute()
+                .item()
+            )
+            for name in target_group:
+                means[name] = tgt_mean
+                standard_deviations[name] = tgt_std
+                applied_vars.append(name)
 
+    std_vars = list(applied_vars)
     standardized = processed.copy()
     for name in std_vars:
         standardized[name] = (
@@ -1337,10 +1398,14 @@ def prepare_model_data(ds, options, mode):
         data_options.log_target = bool(log_target)
         data_options.n_temporal_lags = n_temporal_lags
         data_options.add_geo = bool(add_geo)
+        data_options.std_features = list(std_features)
+        data_options.std_target = bool(std_target)
         data_options.transforms = {
             "target": "natural logarithm" if log_target else "none",
             "temporal_lags": n_temporal_lags,
             "add_geo": bool(add_geo),
+            "std_target": bool(std_target),
+            "std_features": list(std_features),
             "cloud_mode": cloud_mode,
             "cloud_seed": cloud_seed,
         }

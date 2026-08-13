@@ -316,6 +316,142 @@ def test_prepare_model_data_rejects_bad_mode():
         prepare_model_data(ds, options, mode="bogus")
 
 
+def test_prepare_model_data_std_target_false_leaves_target_raw():
+    # Default: the target is not standardized, so target_mean/std are the
+    # identity transform and full_target stays in raw (or log) units.
+    ds, metadata = demo_data(days=30, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata, cloud_mode="shift", std_target=False)
+
+    prepare_model_data(ds, options, mode="train")
+
+    assert options.data.target_mean == 0.0
+    assert options.data.target_std == 1.0
+    assert options.data.standardization["full_target"]["applied"] is False
+    assert options.data.standardization["observed_target"]["applied"] is False
+
+
+def test_prepare_model_data_std_target_shares_one_scale():
+    # std_target=True computes a single (mean, std) from the masked
+    # observed_target over the training dates and applies it to observed_target,
+    # its temporal lags, and full_target so inputs and label share one scale.
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(
+        ds, metadata, cloud_mode="shift", std_target=True, n_temporal_lags=1
+    )
+
+    _, stats = prepare_model_data(ds, options, mode="train")
+
+    std_map = options.data.standardization
+    assert std_map["full_target"]["applied"]
+    assert std_map["observed_target"]["applied"]
+    assert std_map["observed_target_m1"]["applied"]
+    assert std_map["observed_target_p1"]["applied"]
+
+    # full_target and observed_target (and lags) share the SAME mean/std.
+    target_group = [
+        "full_target",
+        "observed_target",
+        "observed_target_m1",
+        "observed_target_p1",
+    ]
+    means = {std_map[name]["mean"] for name in target_group}
+    stds = {std_map[name]["std"] for name in target_group}
+    assert len(means) == 1
+    assert len(stds) == 1
+
+    # The recorded target stats match, and std should be non-trivial.
+    assert options.data.target_mean == std_map["full_target"]["mean"]
+    assert options.data.target_std == std_map["full_target"]["std"]
+    assert options.data.target_std != 1.0
+
+
+def test_prepare_model_data_std_target_stats_from_train_dates_only():
+    # The target statistics must be computed from the masked observed_target
+    # restricted to the training dates. Verify by recomputing directly and
+    # comparing to the recorded target stats.
+    import numpy as np
+    import pandas as pd
+
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=7)
+    options = _full_options(ds, metadata, cloud_mode="shift", std_target=True)
+
+    prepared, _ = prepare_model_data(ds, options, mode="train")
+
+    # observed_target over the training dates should have ~zero mean / unit std
+    # after standardization, because the target stats were fit on exactly that
+    # slice. Select the training dates from the returned (train+val) dataset.
+    train_dates = pd.to_datetime(options.split.train_selection())
+    obs_train = prepared["observed_target"].sel(time=train_dates)
+    mean = float(obs_train.mean().compute())
+    std = float(obs_train.std().compute())
+    assert abs(mean) < 1e-4
+    assert abs(std - 1.0) < 1e-4
+
+
+def test_prepare_model_data_std_features_standardizes_only_listed():
+    # Only the features named in std_features are standardized; others are left
+    # raw. Each standardized feature uses its own statistics.
+    ds, metadata = demo_data(days=30, lat_size=16, lon_size=16, seed=3)
+    ds = ds.assign(sst=ds["chlor_a"] * 2.0 + 5.0, wind=ds["chlor_a"] * 0.1)
+    options = _full_options(ds, metadata, cloud_mode="shift")
+    options.data.features = ["sst", "wind"]
+    options.data.std_features = ["sst"]
+    options.data.std_target = False
+
+    prepare_model_data(ds, options, mode="train")
+
+    assert options.data.standardization["sst"]["applied"] is True
+    assert options.data.standardization["sst"]["std"] != 1.0
+    assert options.data.standardization["wind"]["applied"] is False
+    assert options.data.standardization["wind"]["std"] == 1.0
+
+
+def test_prepare_model_data_rejects_target_in_features():
+    ds, metadata = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata, cloud_mode="shift")
+    options.data.features = ["chlor_a"]
+
+    with pytest.raises(ValueError, match="never the target"):
+        prepare_model_data(ds, options, mode="train")
+
+
+def test_prepare_model_data_rejects_observed_target_in_features():
+    ds, metadata = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata, cloud_mode="shift")
+    options.data.features = ["observed_target"]
+
+    with pytest.raises(ValueError, match="never the target"):
+        prepare_model_data(ds, options, mode="train")
+
+
+def test_prepare_model_data_rejects_std_features_not_in_features():
+    ds, metadata = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata, cloud_mode="shift")
+    options.data.std_features = ["not_a_feature"]
+
+    with pytest.raises(ValueError, match="must be a subset"):
+        prepare_model_data(ds, options, mode="train")
+
+
+def test_prepare_model_data_std_target_reused_in_test_mode():
+    # test mode reuses the recorded target standardization (no recompute) and
+    # applies it to full_target so the label matches training.
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata, cloud_mode="shift", std_target=True)
+
+    prepare_model_data(ds, options, mode="train")
+    recorded_std = options.data.standardization["full_target"]["std"]
+
+    test_out, _ = prepare_model_data(ds, options, mode="test")
+
+    # The standardized full_target in test mode has ~unit spread (it was scaled
+    # by the recorded std), confirming the recorded stats were applied.
+    applied_std = float(test_out["full_target"].std().compute())
+    assert 0.5 < applied_std < 1.5
+    # options unchanged by the test run.
+    assert options.data.standardization["full_target"]["std"] == recorded_std
+
+
 def test_data_options_rejects_bad_cloud_mode():
     with pytest.raises(ValueError, match="cloud_mode"):
         DataOptions(
