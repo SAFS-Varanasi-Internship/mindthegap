@@ -152,7 +152,7 @@ def test_metadata_records_data_source_from_argument(tmp_path):
     bundle_path = tmp_path / "bundle"
     _create_metadata_with_data_source(
         bundle_path,
-        data_source="demo_data(dataset='synthetic', days=12)",
+        data_source="demo_data(dataset='pace')",
     )
 
     metadata = yaml.safe_load(
@@ -160,7 +160,7 @@ def test_metadata_records_data_source_from_argument(tmp_path):
     )
     assert (
         metadata["dataset"]["data_source"]
-        == "demo_data(dataset='synthetic', days=12)"
+        == "demo_data(dataset='pace')"
     )
 
 
@@ -178,14 +178,14 @@ def test_load_model_bundle_reports_data_source(tmp_path, capsys):
     bundle_path = tmp_path / "bundle"
     _create_metadata_with_data_source(
         bundle_path,
-        data_source="demo_data(dataset='synthetic', days=12)",
+        data_source="demo_data(dataset='pace')",
     )
     save_model_bundle(_model(), bundle_path)
 
     capsys.readouterr()
     load_model_bundle(bundle_path)
     out = capsys.readouterr().out
-    assert "demo_data(dataset='synthetic', days=12)" in out
+    assert "demo_data(dataset='pace')" in out
 
 
 def _create_metadata_with_data_source(bundle_path, *, data_source):

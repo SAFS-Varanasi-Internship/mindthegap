@@ -25,17 +25,11 @@ def _demo_data_call(
     smoke_test,
     smoke_days,
     smoke_size,
-    days,
-    lat_size,
-    lon_size,
-    start,
-    seed,
-    cloud_fraction,
 ):
     """Reconstruct the ``demo_data(...)`` call that produced a dataset.
 
-    Returns a string such as ``demo_data(dataset='synthetic', days=30)`` that
-    records exactly how the demo dataset was loaded, so it can be stored in the
+    Returns a string such as ``demo_data(dataset='pace')`` that records exactly
+    how the demo dataset was loaded, so it can be stored in the
     options/model-bundle metadata and printed by
     :func:`mindthegap.load_model_bundle`.
     """
@@ -57,55 +51,44 @@ def _demo_data_call(
             parts.append(f"smoke_days={smoke_days}")
         if smoke_size != 128:
             parts.append(f"smoke_size={smoke_size}")
-    if dataset == "synthetic":
-        for name, value, default in (
-            ("days", days, 120),
-            ("lat_size", lat_size, 16),
-            ("lon_size", lon_size, 16),
-            ("start", start, "2020-01-01"),
-            ("seed", seed, 42),
-            ("cloud_fraction", cloud_fraction, 0.12),
-        ):
-            if value != default:
-                parts.append(f"{name}={value!r}")
     return "demo_data(" + ", ".join(parts) + ")"
 
 
 def demo_data(
-    dataset="synthetic",
+    dataset,
+    options,
     region=None,
     time_slice=None,
     *,
     smoke_test=False,
     smoke_days=120,
     smoke_size=128,
-    days=120,
-    lat_size=16,
-    lon_size=16,
-    start="2020-01-01",
-    seed=42,
-    cloud_fraction=0.12,
 ):
-    """Load a dataset and return ``(dataset, metadata)``.
+    """Load a real ocean-color dataset and configure ``options`` in place.
 
-    ``dataset`` may be ``"pace"``, ``"globcolour"``,
-    ``"indian-ocean"``, ``"io-shared-public"`` or ``"synthetic"``. ``region`` may be a supported
-    name or ``[lat_min, lat_max, lon_min, lon_max]``. ``None`` selects the
-    full spatial extent.
+    ``dataset`` may be ``"pace"``, ``"globcolour"``, ``"indian-ocean"``, or
+    ``"io-shared-public"``. ``region`` may be a supported name or
+    ``[lat_min, lat_max, lon_min, lon_max]``. ``None`` selects the full spatial
+    extent.
+
+    ``options`` is the canonical source of truth: this loader resolves the
+    dataset-specific variable names (target, missing_flag, land_flag), identity,
+    spatial bounds, and time range directly onto ``options.data`` (via
+    :meth:`DataOptions.apply_dataset`) and then resolves the gridder/fit
+    heuristics via :meth:`Options.set_config`. The dataset name and source are
+    also stored on ``ds.attrs["dataset_name"]`` / ``ds.attrs["dataset_source"]``
+    when not already present. Only the loaded ``ds`` is returned; ``options`` is
+    mutated in place.
 
     When ``smoke_test`` is true, the loaded dataset is subset to at most
     ``smoke_days`` time steps and ``smoke_size`` cells in each spatial
-    dimension so remote validation runs stay small. The synthetic loader is
-    generated at that reduced size directly. Sizing of the synthetic dataset is
-    controlled by ``smoke_days``/``smoke_size`` (or the defaults) rather than by
-    callers threading ``days``/``lat_size``/``lon_size`` from a notebook.
+    dimension so remote validation runs stay small.
     """
     loaders = {
         "pace": _load_pace,
         "globcolour": _load_globcolour,
         "indian-ocean": _load_indian_ocean,
         "io-shared-public": _load_io_shared_public,
-        "synthetic": _load_synthetic,
     }
     if dataset not in loaders:
         choices = ", ".join(loaders)
@@ -118,29 +101,9 @@ def demo_data(
         smoke_test=smoke_test,
         smoke_days=smoke_days,
         smoke_size=smoke_size,
-        days=days,
-        lat_size=lat_size,
-        lon_size=lon_size,
-        start=start,
-        seed=seed,
-        cloud_fraction=cloud_fraction,
     )
 
-    if dataset == "synthetic":
-        if smoke_test:
-            days = min(days, smoke_days)
-            lat_size = min(lat_size, smoke_size)
-            lon_size = min(lon_size, smoke_size)
-        ds = loaders[dataset](
-            days=days,
-            lat_size=lat_size,
-            lon_size=lon_size,
-            start=start,
-            seed=seed,
-            cloud_fraction=cloud_fraction,
-        )
-    else:
-        ds = loaders[dataset]()
+    ds = loaders[dataset]()
 
     region_bounds, region_name = _resolve_region(region)
     ds = _select_demo_subset(
@@ -156,41 +119,32 @@ def demo_data(
         )
     ds = _prepare_demo_dataset(dataset, ds)
     config = _dataset_config(dataset)
-    metadata = {
-        "dataset": {
-            "name": config["name"],
-            "product_id": config["product_id"],
-            "loader": dataset,
-            "region": {
-                "lat": [
-                    float(ds["lat"].min()),
-                    float(ds["lat"].max()),
-                ],
-                "lon": [
-                    float(ds["lon"].min()),
-                    float(ds["lon"].max()),
-                ],
-            },
-            "available_period": (
-                f"{pd.to_datetime(ds.time.values[0]).date()} to "
-                f"{pd.to_datetime(ds.time.values[-1]).date()}"
-            ),
-        },
-        "target": {
-            "name": config["target"],
-            "units": ds[config["target"]].attrs.get("units", "unknown"),
-        },
-        "variables": {
-            "target": config["target"],
-            "features": [],
-            "missing_flag": config["missing_flag"],
-            "land_flag": config["land_flag"],
-        },
-    }
-    if region_name is not None:
-        metadata["dataset"]["region_name"] = region_name
-    metadata["dataset"]["data_source"] = data_source
-    return ds, metadata
+
+    if "dataset_name" not in ds.attrs:
+        ds.attrs["dataset_name"] = config["name"]
+    if "dataset_source" not in ds.attrs:
+        ds.attrs["dataset_source"] = config["dataset_source"]
+
+    options.data.apply_dataset(
+        ds,
+        target_variable=config["target"],
+        missing_flag=config["missing_flag"],
+        land_flag=config["land_flag"],
+        source=config["name"],
+        product_id=config["product_id"],
+        region_name=region_name,
+        data_source=data_source,
+    )
+    options.set_config(ds)
+
+    if options.verbose:
+        print(f"Dataset: {ds.attrs['dataset_name']}")
+        print(f"  target:      {options.data.target_variable}")
+        print(f"  lat_bounds:  {options.data.lat_bounds}")
+        print(f"  lon_bounds:  {options.data.lon_bounds}")
+        print(f"  time_bounds: {options.data.time_bounds}")
+
+    return ds
 
 
 def _dataset_config(dataset):
@@ -198,6 +152,10 @@ def _dataset_config(dataset):
         "pace": {
             "name": "PACE",
             "product_id": "PACE_OCI_L3M_CHL",
+            "dataset_source": (
+                "https://data.source.coop/fish-pace/pace-oci/inregion/"
+                "PACE_OCI_L3M_CHL"
+            ),
             "target": "chlor_a",
             "missing_flag": "cloud_flag",
             "land_flag": "land_flag",
@@ -207,6 +165,10 @@ def _dataset_config(dataset):
             "product_id": (
                 "cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D"
             ),
+            "dataset_source": (
+                "https://data.source.coop/fish-pace/globcolour/"
+                "cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D"
+            ),
             "target": "CHL",
             "missing_flag": "cloud_flag",
             "land_flag": "land_flag",
@@ -214,6 +176,9 @@ def _dataset_config(dataset):
         "indian-ocean": {
             "name": "Indian Ocean",
             "product_id": "mind_the_chl_gap/IO_rechunked.zarr",
+            "dataset_source": (
+                "gcs://nmfs_odp_nwfsc/CB/mind_the_chl_gap/IO_rechunked.zarr"
+            ),
             "target": "CHL_cmes-level3",
             "missing_flag": "CHL_cmes-cloud",
             "land_flag": "CHL_cmes-land",
@@ -221,16 +186,13 @@ def _dataset_config(dataset):
         "io-shared-public": {
             "name": "IO rechunkded in shared-public",
             "product_id": "shared-public/IO_rechunked.zarr",
+            "dataset_source": (
+                "/home/jovyan/shared-public/mindthegap/data/"
+                "IO_rechunked.zarr"
+            ),
             "target": "CHL_cmes-level3",
             "missing_flag": "CHL_cmes-cloud",
             "land_flag": "CHL_cmes-land",
-        },
-        "synthetic": {
-            "name": "Synthetic",
-            "product_id": "mindthegap-synthetic",
-            "target": "chlor_a",
-            "missing_flag": "cloud_flag",
-            "land_flag": "land_flag",
         },
     }[dataset]
 
@@ -350,58 +312,6 @@ def _prepare_demo_dataset(dataset, ds):
                 )
             }
         )
-    return ds
-
-
-def _load_synthetic(
-    days,
-    lat_size,
-    lon_size,
-    start,
-    seed,
-    cloud_fraction,
-):
-    if days <= 0 or lat_size <= 0 or lon_size <= 0:
-        raise ValueError("days, lat_size, and lon_size must be positive")
-    if not 0 <= cloud_fraction <= 1:
-        raise ValueError("cloud_fraction must be between 0 and 1")
-
-    rng = np.random.default_rng(seed)
-    time = pd.date_range(start, periods=days, freq="D")
-    lat = np.linspace(31, 5, lat_size)
-    lon = np.linspace(42, 80, lon_size)
-    day, latitude, longitude = np.meshgrid(
-        np.arange(days),
-        lat,
-        lon,
-        indexing="ij",
-    )
-    chlorophyll = np.exp(
-        0.5
-        + 0.25 * np.sin(2 * np.pi * day / 30)
-        + 0.15 * np.cos(np.deg2rad(latitude * 3))
-        + 0.1 * np.sin(np.deg2rad(longitude * 4))
-        + rng.normal(0, 0.05, day.shape)
-    ).astype("float32")
-    land = np.broadcast_to(lat[:, None] > 28, chlorophyll.shape)
-    cloud = rng.random(chlorophyll.shape) < cloud_fraction
-    chlorophyll[land | cloud] = np.nan
-
-    ds = xr.Dataset(
-        data_vars={
-            "chlor_a": (("time", "lat", "lon"), chlorophyll),
-            "cloud_flag": (
-                ("time", "lat", "lon"),
-                cloud.astype("int8"),
-            ),
-            "land_flag": (
-                ("time", "lat", "lon"),
-                land.astype("int8"),
-            ),
-        },
-        coords={"time": time, "lat": lat, "lon": lon},
-    )
-    ds["chlor_a"].attrs["units"] = "mg m-3"
     return ds
 
 
@@ -919,7 +829,11 @@ def prepare_model_data(ds, options, mode):
     inputs match training exactly; the whole passed-in ``ds`` is used and the
     split is not consulted.
 
-    Returns ``(output, stats)``.
+    Returns the standardized ``output`` dataset. In ``mode="train"`` the
+    standardization statistics (and all other resolved settings) are written to
+    ``options.data`` -- ``options.data.standardization``,
+    ``options.data.target_mean``, and ``options.data.target_std`` -- rather than
+    returned separately, so ``options`` remains the single source of truth.
     """
     from .options import Options as _Options
 
@@ -1375,13 +1289,6 @@ def prepare_model_data(ds, options, mode):
         # their true neighbours even when those neighbours are dropped here.
         # make_generator later splits this back into train/val via options.split.
         output = output.sel(time=fit_dates)
-    stats = {
-        name: np.array(
-            [means[name], standard_deviations[name]],
-            dtype=np.float32,
-        )
-        for name in standardizable_vars
-    }
 
     if mode == "train":
         input_names = [name for name in output_vars if name != "full_target"]
@@ -1448,7 +1355,7 @@ def prepare_model_data(ds, options, mode):
         )
         print(f"Dataset is LAZY (not in memory): {output.chunks}")
 
-    return output, stats
+    return output
 
 
 def _random_train_val_indices(
