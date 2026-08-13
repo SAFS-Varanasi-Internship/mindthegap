@@ -2,25 +2,24 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from mindthegap import Options, train_validation_dates
 from mindthegap.data import prepare_model_data, demo_data
 from mindthegap.options import DataOptions
 
 
-def _data_options(ds, **cloud_kwargs):
-    """DataOptions resolved for the demo dataset with cloud config overrides.
+def _full_options(ds, metadata, *, resolve_split=True, seed=1, **cloud_kwargs):
+    """Full Options resolved for the demo dataset.
 
-    Cloud configuration is canonical on ``options.data`` (never a
-    ``prepare_model_data`` argument), so tests set it here.
+    ``prepare_model_data`` reads every setting from ``options``; cloud
+    configuration is set on ``options.data`` (never a call argument).
     """
-    opts = DataOptions(
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        **cloud_kwargs,
-    )
-    # Mark as resolved enough for prepare_model_data to read the fields.
-    opts.target = "chlor_a"
-    return opts
+    options = Options.default(data=ds, metadata=metadata, seed=seed)
+    options.verbose = False
+    for key, value in cloud_kwargs.items():
+        setattr(options.data, key, value)
+    if resolve_split:
+        train_validation_dates(ds.time, options, seed=seed, verbose=False)
+    return options
 
 
 def test_demo_data_has_requested_shape_and_flags():
@@ -146,17 +145,11 @@ def test_demo_data_rejects_invalid_region(region, error, message):
 
 
 def test_prepare_model_data_broadcasts_static_land_mask():
-    ds, _ = demo_data(days=12, lat_size=8, lon_size=8)
+    ds, metadata = demo_data(days=12, lat_size=8, lon_size=8)
     ds["land_flag"] = ds["land_flag"].isel(time=0, drop=True)
+    options = _full_options(ds, metadata)
 
-    standardized, _ = prepare_model_data(
-        ds,
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        std_vars=[],
-        output_chunks={"time": 4, "lat": 8, "lon": 8},
-    )
+    standardized, _ = prepare_model_data(ds, options, mode="train")
 
     assert standardized["land_flag"].dims == ("time", "lat", "lon")
     xr.testing.assert_equal(
@@ -170,15 +163,12 @@ def test_prepare_model_data_crops_to_unet_multiple():
 
     multiple = unet_spatial_multiple()
     # Sizes deliberately not multiples of the U-Net factor.
-    ds, _ = demo_data(days=12, lat_size=multiple + 3, lon_size=multiple + 5)
-
-    standardized, _ = prepare_model_data(
-        ds,
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        std_vars=[],
+    ds, metadata = demo_data(
+        days=12, lat_size=multiple + 3, lon_size=multiple + 5
     )
+    options = _full_options(ds, metadata)
+
+    standardized, _ = prepare_model_data(ds, options, mode="train")
 
     assert standardized.sizes["lat"] % multiple == 0
     assert standardized.sizes["lon"] % multiple == 0
@@ -203,17 +193,10 @@ def test_synthetic_cloud_cube_shape_and_coverage():
 
 
 def test_prepare_model_data_synthetic_clouds_hide_observed_ocean():
-    ds, _ = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata, cloud_mode="synthetic", cloud_seed=1)
 
-    standardized, _ = prepare_model_data(
-        ds,
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        std_vars=[],
-        options=_data_options(ds, cloud_mode="synthetic"),
-        cloud_seed=1,
-    )
+    standardized, _ = prepare_model_data(ds, options, mode="train")
 
     estimate = standardized["estimate_flag"].values == 1
     land = standardized["land_flag"].values == 1
@@ -230,17 +213,18 @@ def test_prepare_model_data_synthetic_clouds_hide_observed_ocean():
 
 
 def test_prepare_model_data_synthetic_clouds_are_reproducible():
-    ds, _ = demo_data(days=16, lat_size=16, lon_size=16, seed=5)
-    common = dict(
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        std_vars=[],
-        options=_data_options(ds, cloud_mode="synthetic"),
-    )
-    a, _ = prepare_model_data(ds, cloud_seed=42, **common)
-    b, _ = prepare_model_data(ds, cloud_seed=42, **common)
-    c, _ = prepare_model_data(ds, cloud_seed=99, **common)
+    ds, metadata = demo_data(days=16, lat_size=16, lon_size=16, seed=5)
+
+    def run(cloud_seed):
+        options = _full_options(
+            ds, metadata, cloud_mode="synthetic", cloud_seed=cloud_seed
+        )
+        out, _ = prepare_model_data(ds, options, mode="train")
+        return out
+
+    a = run(42)
+    b = run(42)
+    c = run(99)
 
     assert np.array_equal(
         a["estimate_flag"].values, b["estimate_flag"].values
@@ -251,16 +235,12 @@ def test_prepare_model_data_synthetic_clouds_are_reproducible():
 
 
 def test_prepare_model_data_shift_cloud_mode_uses_future_clouds():
-    ds, _ = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
-
-    standardized, _ = prepare_model_data(
-        ds,
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        std_vars=[],
-        options=_data_options(ds, cloud_mode="shift", missing_flag_shift=5),
+    ds, metadata = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(
+        ds, metadata, cloud_mode="shift", missing_flag_shift=5
     )
+
+    standardized, _ = prepare_model_data(ds, options, mode="train")
 
     estimate = standardized["estimate_flag"].values == 1
     land = standardized["land_flag"].values == 1
@@ -271,7 +251,7 @@ def test_prepare_model_data_shift_cloud_mode_uses_future_clouds():
 @pytest.mark.parametrize(
     "cloud_kwargs",
     [
-        {"cloud_mode": "synthetic", "cloud_coverage": 0.5},
+        {"cloud_mode": "synthetic", "cloud_coverage": 0.5, "cloud_seed": 1},
         {"cloud_mode": "shift", "missing_flag_shift": 5},
     ],
 )
@@ -280,17 +260,10 @@ def test_prepare_model_data_flags_are_mutually_exclusive(cloud_kwargs):
     # only: estimate_flag never overlaps the other cloud/state flags. (land and
     # unavailable can co-occur in the raw demo data -- a real cloud reported
     # over land -- which is unrelated to synthetic-cloud creation.)
-    ds, _ = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata, **cloud_kwargs)
 
-    standardized, _ = prepare_model_data(
-        ds,
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        std_vars=[],
-        options=_data_options(ds, **cloud_kwargs),
-        cloud_seed=1,
-    )
+    standardized, _ = prepare_model_data(ds, options, mode="train")
 
     estimate = standardized["estimate_flag"].values == 1
     unavailable = standardized["unavailable_flag"].values == 1
@@ -301,6 +274,46 @@ def test_prepare_model_data_flags_are_mutually_exclusive(cloud_kwargs):
     assert not (estimate & unavailable).any()
     assert not (estimate & land).any()
     assert not (estimate & observed).any()
+
+
+def test_prepare_model_data_test_mode_reuses_stats_and_adds_clouds():
+    # mode="test" adds synthetic clouds + flags like train, but standardizes
+    # with the statistics recorded during a prior train run (no recompute) and
+    # does not modify options.
+    ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata, cloud_mode="synthetic", cloud_seed=1)
+
+    prepare_model_data(ds, options, mode="train")
+    recorded = dict(options.data.standardization)
+    target_mean_before = options.data.target_mean
+
+    test_out, _ = prepare_model_data(ds, options, mode="test")
+
+    # Synthetic clouds + flags are present, over the whole record.
+    assert (test_out["estimate_flag"].values == 1).any()
+    assert "unavailable_flag" in test_out
+    assert test_out.sizes["time"] == ds.sizes["time"]
+    # options is not mutated by a test run.
+    assert options.data.standardization == recorded
+    assert options.data.target_mean == target_mean_before
+
+
+def test_prepare_model_data_test_and_gapfill_require_prior_stats():
+    ds, metadata = demo_data(days=20, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(ds, metadata)
+    # Fresh options: no standardization recorded yet.
+    options.data.standardization = {}
+
+    for mode in ("test", "gapfill"):
+        with pytest.raises(ValueError, match="standardization is empty"):
+            prepare_model_data(ds, options, mode=mode)
+
+
+def test_prepare_model_data_rejects_bad_mode():
+    ds, metadata = demo_data(days=12, lat_size=8, lon_size=8, seed=3)
+    options = _full_options(ds, metadata)
+    with pytest.raises(ValueError, match="mode must be"):
+        prepare_model_data(ds, options, mode="bogus")
 
 
 def test_data_options_rejects_bad_cloud_mode():

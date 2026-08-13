@@ -15,9 +15,8 @@ from mindthegap import (
 def _prepared(days=60, seed=3):
     ds, metadata = demo_data(days=days, lat_size=16, lon_size=16, seed=seed)
     options = Options.default(data=ds, metadata=metadata)
-    ds_std, _ = prepare_model_data(
-        ds, options=options.data, gridder=options.gridder
-    )
+    train_validation_dates(ds.time, options, seed=seed, verbose=False)
+    ds_std, _ = prepare_model_data(ds, options, mode="train")
     return ds, ds_std, options
 
 
@@ -96,7 +95,13 @@ def test_train_validation_dates_manual_empty_slice_errors():
 
 
 def test_make_generator_requires_resolved_split():
-    _, ds_std, options = _prepared()
+    ds, metadata = demo_data(days=60, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(data=ds, metadata=metadata)
+    train_validation_dates(ds.time, options, seed=3, verbose=False)
+    ds_std, _ = prepare_model_data(ds, options, mode="train")
+    # Clear the split so make_generator has no dates to work with.
+    options.split.train_dates = []
+    options.split.val_dates = []
 
     with pytest.raises(ValueError, match="train_validation_dates"):
         make_generator(ds_std, options=options)
@@ -128,10 +133,9 @@ def test_make_generator_returns_datasets_and_steps():
 def test_prepare_model_data_defaults_chunks_from_gridder():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=2)
     options = Options.default(data=ds, metadata=metadata)
+    train_validation_dates(ds.time, options, seed=2, verbose=False)
 
-    ds_std, _ = prepare_model_data(
-        ds, options=options.data, gridder=options.gridder
-    )
+    ds_std, _ = prepare_model_data(ds, options, mode="train")
 
     assert ds_std.chunksizes["lat"][0] == options.gridder.tile_size[0]
 

@@ -10,23 +10,21 @@ from mindthegap.data import (
     demo_data,
 )
 from mindthegap import cloud_bank as cb
-from mindthegap.options import DataOptions
+from mindthegap import Options, train_validation_dates
 
 
-def _data_options(**cloud_kwargs):
-    """DataOptions carrying the demo variable names and cloud config.
+def _full_options(ds, metadata, *, seed=1, **cloud_kwargs):
+    """Full Options resolved for the demo dataset with cloud overrides.
 
-    Cloud configuration is canonical on ``options.data`` (not a
-    ``prepare_model_data`` argument), so tests set it here.
+    ``prepare_model_data`` reads every setting from ``options``; cloud
+    configuration is set on ``options.data`` (never a call argument).
     """
-    opts = DataOptions(
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        **cloud_kwargs,
-    )
-    opts.target = "chlor_a"
-    return opts
+    options = Options.default(data=ds, metadata=metadata, seed=seed)
+    options.verbose = False
+    for key, value in cloud_kwargs.items():
+        setattr(options.data, key, value)
+    train_validation_dates(ds.time, options, seed=seed, verbose=False)
+    return options
 
 
 def _write_bank(path, n_time=40, n_lat=32, n_lon=32, coverage=0.4, seed=0):
@@ -160,23 +158,19 @@ def test_bank_to_cube_preserves_temporal_correlation(tmp_path):
 
 
 def test_prepare_model_data_bank_falls_back_when_no_match():
-    ds, _ = demo_data(days=16, lat_size=16, lon_size=16, seed=3)
+    ds, metadata = demo_data(days=16, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(
+        ds,
+        metadata,
+        cloud_mode="synthetic_bank",
+        # No published bank matches these params -> fall back.
+        cloud_coverage=0.37,
+        cloud_blob_sigma=6.0,
+        cloud_time_sigma=2.0,
+        cloud_seed=1,
+    )
     with pytest.warns(RuntimeWarning):
-        standardized, _ = prepare_model_data(
-            ds,
-            target_variable="chlor_a",
-            missing_flag="cloud_flag",
-            land_flag="land_flag",
-            std_vars=[],
-            options=_data_options(
-                cloud_mode="synthetic_bank",
-                # No published bank matches these params -> fall back.
-                cloud_coverage=0.37,
-                cloud_blob_sigma=6.0,
-                cloud_time_sigma=2.0,
-            ),
-            cloud_seed=1,
-        )
+        standardized, _ = prepare_model_data(ds, options, mode="train")
     # Fallback still produces synthetic clouds over real ocean.
     estimate = standardized["estimate_flag"].values == 1
     assert estimate.any()
@@ -207,21 +201,17 @@ def test_prepare_model_data_bank_uses_cache(tmp_path, monkeypatch):
     }
     monkeypatch.setattr(cb, "load_manifest", lambda: manifest)
 
-    ds, _ = demo_data(days=16, lat_size=16, lon_size=16, seed=3)
-    standardized, _ = prepare_model_data(
+    ds, metadata = demo_data(days=16, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(
         ds,
-        target_variable="chlor_a",
-        missing_flag="cloud_flag",
-        land_flag="land_flag",
-        std_vars=[],
-        options=_data_options(
-            cloud_mode="synthetic_bank",
-            cloud_coverage=0.4,
-            cloud_blob_sigma=4.0,
-            cloud_time_sigma=2.0,
-        ),
+        metadata,
+        cloud_mode="synthetic_bank",
+        cloud_coverage=0.4,
+        cloud_blob_sigma=4.0,
+        cloud_time_sigma=2.0,
         cloud_seed=1,
     )
+    standardized, _ = prepare_model_data(ds, options, mode="train")
     estimate = standardized["estimate_flag"].values == 1
     land = standardized["land_flag"].values == 1
     unavailable = standardized["unavailable_flag"].values == 1
