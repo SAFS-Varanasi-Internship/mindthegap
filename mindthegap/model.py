@@ -409,7 +409,7 @@ def fit_model(
     return history
 
 
-def gapfill_std(ds_std, model, metadata, *, time=None, verbose=None):
+def gapfill_std(ds_std, model, options, *, time=None, verbose=None):
     """Run a trained model on an already-standardized dataset (low level).
 
     ``ds_std`` must be the output of
@@ -417,8 +417,8 @@ def gapfill_std(ds_std, model, metadata, *, time=None, verbose=None):
     same model: it already carries the inference channels (real observations,
     ``estimate_flag`` over the cloud/NaN pixels to fill, ``unavailable_flag`` all
     zero) so **no relabelling is done here**. Channels are stacked in the exact
-    order recorded in ``metadata["inputs"]`` and the model is run one time frame
-    at a time.
+    order recorded in ``options.data.input_names`` and the model is run one time
+    frame at a time.
 
     This is a **low-level** function: it returns the model prediction exactly as
     produced, in the model's standardized output space. It does **not** transform
@@ -435,8 +435,9 @@ def gapfill_std(ds_std, model, metadata, *, time=None, verbose=None):
         mode="gapfill")``).
     model : keras.Model
         Loaded model, e.g. from :func:`mindthegap.load_model_bundle`.
-    metadata : dict
-        Bundle metadata (used only for the input channel order).
+    options : mindthegap.Options
+        The resolved configuration (used only for the input channel order,
+        ``options.data.input_names``).
     time : optional
         A single time label, a list/array of labels, or a slice selecting which
         frames to gap-fill. Defaults to every time step in ``ds_std``.
@@ -451,10 +452,9 @@ def gapfill_std(ds_std, model, metadata, *, time=None, verbose=None):
         holding the raw model output in standardized space (no unstandardizing
         or de-logging applied).
     """
-    inputs = metadata.get("inputs")
-    if not inputs:
-        raise ValueError("bundle metadata does not define input channels")
-    names = [item["name"] for item in inputs]
+    names = list(options.data.input_names)
+    if not names:
+        raise ValueError("options.data.input_names is empty")
     missing = [name for name in names if name not in ds_std]
     if missing:
         raise KeyError(

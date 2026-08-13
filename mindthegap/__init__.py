@@ -20,9 +20,7 @@ from .model import (
     UNet,
 )
 from .model_bundle import (
-    create_model_bundle_metadata,
     load_model_bundle,
-    options_from_bundle,
     save_model_bundle,
 )
 from .options import (
@@ -52,10 +50,8 @@ __all__ = [
     "fit_model",
     "gapfill_std",
     "UNet",
-    "create_model_bundle_metadata",
     "save_model_bundle",
     "load_model_bundle",
-    "options_from_bundle",
     "Options",
     "DataOptions",
     "GridderOptions",

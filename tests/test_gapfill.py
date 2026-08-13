@@ -2,7 +2,7 @@ import keras
 import numpy as np
 import xarray as xr
 
-from mindthegap import gapfill_std
+from mindthegap import gapfill_std, Options
 
 
 CHANNELS = ["observed_target", "estimate_flag", "land_flag"]
@@ -35,23 +35,20 @@ def _ds_std(times=3, lat=8, lon=8, seed=0):
     return xr.Dataset(data, coords=coords)
 
 
-def _metadata():
-    return {
-        "inputs": [{"name": name, "channel": i}
-                   for i, name in enumerate(CHANNELS)],
-        "target": {"name": "full_target", "units": "mg m-3"},
-        "preprocessing": {
-            "standardization": {
-                "full_target": {"mean": 0.0, "std": 1.0, "applied": False}
-            },
-        },
+def _options():
+    options = Options.default(seed=1)
+    options.data.target = "full_target"
+    options.data.input_names = list(CHANNELS)
+    options.data.standardization = {
+        "full_target": {"mean": 0.0, "std": 1.0, "applied": False}
     }
+    return options
 
 
 def test_gapfill_std_returns_time_lat_lon_field():
     ds = _ds_std()
     model = _passthrough_model()
-    out = gapfill_std(ds, model, _metadata())
+    out = gapfill_std(ds, model, _options())
 
     field = out["gapfilled_target"]
     assert field.dims == ("time", "lat", "lon")
@@ -65,7 +62,7 @@ def test_gapfill_std_returns_raw_model_output():
     model = _passthrough_model()
     # A passthrough model returns the first input channel unchanged. gapfill_std
     # must return exactly that, with no unstandardizing and no de-logging.
-    out = gapfill_std(ds, model, _metadata())
+    out = gapfill_std(ds, model, _options())
 
     np.testing.assert_allclose(
         out["gapfilled_target"].values,
@@ -79,7 +76,7 @@ def test_gapfill_std_single_time_keeps_time_dim():
     ds = _ds_std()
     model = _passthrough_model()
     stamp = ds["time"].values[1]
-    out = gapfill_std(ds, model, _metadata(), time=stamp)
+    out = gapfill_std(ds, model, _options(), time=stamp)
 
     field = out["gapfilled_target"]
     assert field.dims == ("time", "lat", "lon")
@@ -94,7 +91,7 @@ def test_gapfill_std_time_subset():
     ds = _ds_std()
     model = _passthrough_model()
     subset = ds["time"].values[:2]
-    out = gapfill_std(ds, model, _metadata(), time=list(subset))
+    out = gapfill_std(ds, model, _options(), time=list(subset))
 
     assert out.sizes["time"] == 2
     np.testing.assert_array_equal(out["time"].values, subset)
@@ -104,7 +101,7 @@ def test_gapfill_std_fills_nan_inputs_with_zero():
     ds = _ds_std()
     ds["observed_target"].values[0, 0, 0] = np.nan
     model = _passthrough_model()
-    out = gapfill_std(ds, model, _metadata())
+    out = gapfill_std(ds, model, _options())
 
     field = out["gapfilled_target"]
     assert np.isfinite(field.values).all()
@@ -115,7 +112,7 @@ def test_gapfill_std_requires_all_input_channels():
     ds = _ds_std().drop_vars("land_flag")
     model = _passthrough_model()
     try:
-        gapfill_std(ds, model, _metadata())
+        gapfill_std(ds, model, _options())
     except KeyError as error:
         assert "land_flag" in str(error)
     else:

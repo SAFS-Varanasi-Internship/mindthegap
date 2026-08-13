@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from mindthegap import viz
+from mindthegap import viz, Options
 
 
 class _Model:
@@ -45,31 +45,27 @@ def _dataset():
     )
 
 
-def _metadata():
-    return {
-        "inputs": [
-            {"name": "channel_a", "channel": 0},
-            {"name": "channel_b", "channel": 1},
-        ],
-        "preprocessing": {
-            "standardization": {
-                "full_target": {"mean": 2.0, "std": 3.0}
-            }
-        },
+def _options():
+    options = Options.default(seed=1)
+    options.data.target = "full_target"
+    options.data.input_names = ["channel_a", "channel_b"]
+    options.data.standardization = {
+        "full_target": {"mean": 2.0, "std": 3.0, "applied": True}
     }
+    return options
 
 
 def test_map_extent_uses_pixel_edges():
     assert viz._map_extent(_dataset()) == [9.75, 11.75, 2.75, 4.25]
 
 
-def test_predict_frame_uses_metadata_order_and_unstandardizes():
+def test_predict_frame_uses_options_order_and_unstandardizes():
     model = _Model()
 
     prediction = viz.predict_frame(
         _dataset(),
         model,
-        _metadata(),
+        _options(),
         "2020-09-08",
     )
 
@@ -87,7 +83,7 @@ def test_observed_and_flag_frames():
 
     observed = viz.observed_frame(
         dataset,
-        _metadata(),
+        _options(),
         "2020-09-08",
     )
     flags = viz.flag_frame(dataset, "2020-09-08")
@@ -98,14 +94,14 @@ def test_observed_and_flag_frames():
 
 def test_individual_panels_and_composite_share_prediction():
     dataset = _dataset()
-    metadata = _metadata()
+    options = _options()
     model = _Model()
     date = "2020-09-08"
 
     figure, axes = viz.plot_prediction_observed(
         dataset,
         model,
-        metadata,
+        options,
         date,
     )
 
@@ -126,7 +122,7 @@ def test_land_is_overlaid_without_masking_data():
 
     image = viz.plot_observed(
         dataset,
-        _metadata(),
+        _options(),
         "2020-09-08",
         colorbar=False,
     )
@@ -145,7 +141,7 @@ def test_no_land_overlay_when_no_land():
 
     image = viz.plot_observed(
         dataset,
-        _metadata(),
+        _options(),
         "2020-09-08",
         colorbar=False,
     )
