@@ -56,6 +56,7 @@ def _demo_data_call(
 
 def demo_data(
     dataset,
+    options,
     region=None,
     time_slice=None,
     *,
@@ -63,12 +64,21 @@ def demo_data(
     smoke_days=120,
     smoke_size=128,
 ):
-    """Load a real ocean-color dataset and return ``(dataset, metadata)``.
+    """Load a real ocean-color dataset and configure ``options`` in place.
 
     ``dataset`` may be ``"pace"``, ``"globcolour"``, ``"indian-ocean"``, or
     ``"io-shared-public"``. ``region`` may be a supported name or
     ``[lat_min, lat_max, lon_min, lon_max]``. ``None`` selects the full spatial
     extent.
+
+    ``options`` is the canonical source of truth: this loader resolves the
+    dataset-specific variable names (target, missing_flag, land_flag), identity,
+    spatial bounds, and time range directly onto ``options.data`` (via
+    :meth:`DataOptions.apply_dataset`) and then resolves the gridder/fit
+    heuristics via :meth:`Options.set_config`. The dataset name and source are
+    also stored on ``ds.attrs["dataset_name"]`` / ``ds.attrs["dataset_source"]``
+    when not already present. Only the loaded ``ds`` is returned; ``options`` is
+    mutated in place.
 
     When ``smoke_test`` is true, the loaded dataset is subset to at most
     ``smoke_days`` time steps and ``smoke_size`` cells in each spatial
@@ -109,41 +119,32 @@ def demo_data(
         )
     ds = _prepare_demo_dataset(dataset, ds)
     config = _dataset_config(dataset)
-    metadata = {
-        "dataset": {
-            "name": config["name"],
-            "product_id": config["product_id"],
-            "loader": dataset,
-            "region": {
-                "lat": [
-                    float(ds["lat"].min()),
-                    float(ds["lat"].max()),
-                ],
-                "lon": [
-                    float(ds["lon"].min()),
-                    float(ds["lon"].max()),
-                ],
-            },
-            "available_period": (
-                f"{pd.to_datetime(ds.time.values[0]).date()} to "
-                f"{pd.to_datetime(ds.time.values[-1]).date()}"
-            ),
-        },
-        "target": {
-            "name": config["target"],
-            "units": ds[config["target"]].attrs.get("units", "unknown"),
-        },
-        "variables": {
-            "target": config["target"],
-            "features": [],
-            "missing_flag": config["missing_flag"],
-            "land_flag": config["land_flag"],
-        },
-    }
-    if region_name is not None:
-        metadata["dataset"]["region_name"] = region_name
-    metadata["dataset"]["data_source"] = data_source
-    return ds, metadata
+
+    if "dataset_name" not in ds.attrs:
+        ds.attrs["dataset_name"] = config["name"]
+    if "dataset_source" not in ds.attrs:
+        ds.attrs["dataset_source"] = config["dataset_source"]
+
+    options.data.apply_dataset(
+        ds,
+        target_variable=config["target"],
+        missing_flag=config["missing_flag"],
+        land_flag=config["land_flag"],
+        source=config["name"],
+        product_id=config["product_id"],
+        region_name=region_name,
+        data_source=data_source,
+    )
+    options.set_config(ds)
+
+    if options.verbose:
+        print(f"Dataset: {ds.attrs['dataset_name']}")
+        print(f"  target:           {options.data.target_variable}")
+        print(f"  lat_bounds:       {options.data.lat_bounds}")
+        print(f"  lon_bounds:       {options.data.lon_bounds}")
+        print(f"  available_period: {options.data.available_period}")
+
+    return ds
 
 
 def _dataset_config(dataset):
@@ -151,6 +152,10 @@ def _dataset_config(dataset):
         "pace": {
             "name": "PACE",
             "product_id": "PACE_OCI_L3M_CHL",
+            "dataset_source": (
+                "https://data.source.coop/fish-pace/pace-oci/inregion/"
+                "PACE_OCI_L3M_CHL"
+            ),
             "target": "chlor_a",
             "missing_flag": "cloud_flag",
             "land_flag": "land_flag",
@@ -160,6 +165,10 @@ def _dataset_config(dataset):
             "product_id": (
                 "cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D"
             ),
+            "dataset_source": (
+                "https://data.source.coop/fish-pace/globcolour/"
+                "cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D"
+            ),
             "target": "CHL",
             "missing_flag": "cloud_flag",
             "land_flag": "land_flag",
@@ -167,6 +176,9 @@ def _dataset_config(dataset):
         "indian-ocean": {
             "name": "Indian Ocean",
             "product_id": "mind_the_chl_gap/IO_rechunked.zarr",
+            "dataset_source": (
+                "gcs://nmfs_odp_nwfsc/CB/mind_the_chl_gap/IO_rechunked.zarr"
+            ),
             "target": "CHL_cmes-level3",
             "missing_flag": "CHL_cmes-cloud",
             "land_flag": "CHL_cmes-land",
@@ -174,6 +186,10 @@ def _dataset_config(dataset):
         "io-shared-public": {
             "name": "IO rechunkded in shared-public",
             "product_id": "shared-public/IO_rechunked.zarr",
+            "dataset_source": (
+                "/home/jovyan/shared-public/mindthegap/data/"
+                "IO_rechunked.zarr"
+            ),
             "target": "CHL_cmes-level3",
             "missing_flag": "CHL_cmes-cloud",
             "land_flag": "CHL_cmes-land",

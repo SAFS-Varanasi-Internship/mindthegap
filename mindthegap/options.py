@@ -360,13 +360,66 @@ class DataOptions:
         """Return ``True`` once the pipeline has populated the target/inputs."""
         return self.target is not None and bool(self.input_names)
 
+    def apply_dataset(
+        self,
+        ds,
+        *,
+        target_variable,
+        missing_flag,
+        land_flag,
+        source=None,
+        product_id=None,
+        target_units=None,
+        region_name=None,
+        data_source="user manual",
+    ):
+        """Populate identity/variable configuration directly from a dataset.
+
+        Called by :func:`mindthegap.demo_data` (the canonical loader) so that
+        ``options`` -- not a separate metadata dict -- is the single source of
+        truth for the variable names, dataset identity, spatial bounds, and time
+        range. Standardization statistics and input channel order are filled in
+        later by :func:`mindthegap.prepare_model_data`.
+        """
+        import pandas as pd
+
+        self.source = source
+        self.product_id = product_id
+        self.data_source = data_source
+        if region_name is not None:
+            self.region_name = region_name
+
+        self.target_variable = target_variable
+        self.target_name = target_variable
+        self.missing_flag = missing_flag
+        self.land_flag = land_flag
+        self.target_units = (
+            target_units
+            if target_units is not None
+            else ds[target_variable].attrs.get("units", "unknown")
+        )
+
+        self.lat_bounds = (
+            float(ds["lat"].min()),
+            float(ds["lat"].max()),
+        )
+        self.lon_bounds = (
+            float(ds["lon"].min()),
+            float(ds["lon"].max()),
+        )
+        self.available_period = (
+            f"{pd.to_datetime(ds.time.values[0]).date()} to "
+            f"{pd.to_datetime(ds.time.values[-1]).date()}"
+        )
+        return self
+
     def load_from(self, ds, metadata):
         """Populate identity/variable configuration from a dataset + metadata.
 
-        ``metadata`` is the mapping returned alongside the dataset by
-        :func:`mindthegap.demo_data`. This records the values that can be
-        inferred from the loaded data (source identity, variable names,
-        spatial bounds, available period) so notebooks do not have to unpack
+        ``metadata`` is a mapping with ``dataset`` / ``target`` / ``variables``
+        sections (the historical :func:`mindthegap.demo_data` return shape,
+        still produced by test fixtures). Records the values that can be
+        inferred from the loaded data so notebooks/tests do not have to unpack
         the metadata dict into floating variables. Standardization statistics
         and input channel order are filled in later by
         :func:`mindthegap.prepare_model_data`.

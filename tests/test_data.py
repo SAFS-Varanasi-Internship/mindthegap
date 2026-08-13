@@ -409,5 +409,6 @@ def test_make_demo_ds_rejects_invalid_arguments(kwargs):
 def test_demo_data_rejects_unknown_dataset():
     from mindthegap.data import demo_data
 
+    options = Options.default()
     with pytest.raises(ValueError, match="Unknown dataset"):
-        demo_data(dataset="unknown")
+        demo_data(dataset="unknown", options=options)
