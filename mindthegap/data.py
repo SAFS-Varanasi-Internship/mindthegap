@@ -764,26 +764,16 @@ def _resolve_chunks(ds, gridder):
     return {"time": time_chunk, "lat": lat_chunk, "lon": lon_chunk}
 
 
-def prepare_model_data(
-    ds,
-    options=None,
-    *,
-    target_variable=None,
-    missing_flag=None,
-    land_flag=None,
-    features=None,
-    train_dates=None,
-    std_vars=None,
-    log_target=None,
-    cloud_seed=None,
-    n_temporal_lags=None,
-    output_chunks=None,
-    add_geo=None,
-    gridder=None,
-    mode="train",
-    verbose=None,
-):
-    """Prepare lazy model inputs, targets, and standardization statistics.
+def prepare_model_data(ds, options, mode):
+    """Prepare model inputs, targets, and standardization statistics.
+
+    ``options`` is the canonical source of every setting -- variable
+    names/features, ``log_target``, ``n_temporal_lags``, ``add_geo``, the
+    synthetic-cloud configuration, the output chunking (``options.gridder``),
+    the train/validation split (``options.split``), and the standardization
+    statistics. Nothing is passed as a loose keyword argument. ``options`` must
+    be a full :class:`Options` object; ``mode`` is required and must be one of
+    ``"train"``, ``"test"``, or ``"gapfill"``.
 
     The spatial dimensions of ``ds`` are first cropped so their lengths are a
     multiple of the U-Net's downsampling factor (see
@@ -794,14 +784,11 @@ def prepare_model_data(
     the model can actually observe (``observed_target``), temporal lags of
     that observed target, seasonal channels, three per-pixel state flags,
     optional feature variables, and optional spherical coordinates. When the
-    inputs are dask-backed the result is lazy and chunked: pass
-    ``output_chunks`` (a ``{"time": ..., "lat": ..., "lon": ...}`` mapping, with
-    ``-1`` meaning "one chunk over the whole dimension") to control the
-    chunking explicitly. When it is ``None`` the chunking is chosen
-    automatically from the gridder so the lazy graph stays small and the chunks
-    align with how the standardized dataset is consumed downstream (whole
-    spatial frames for a block of time steps, or tile-aligned chunks when the
-    field is large enough that xbatcher must tile it spatially).
+    inputs are dask-backed the result is lazy and chunked from
+    ``options.gridder`` so the lazy graph stays small and the chunks align with
+    how the standardized dataset is consumed downstream (whole spatial frames
+    for a block of time steps, or tile-aligned chunks when the field is large
+    enough that xbatcher must tile it spatially).
 
     Channel semantics
     -----------------
@@ -846,12 +833,36 @@ def prepare_model_data(
 
     Modes
     -----
-    ``mode="train"`` (default) produces the self-supervised training inputs
-    described above. Synthetic clouds are punched into the observed data
+    ``mode="train"`` produces the self-supervised training inputs described
+    above. Synthetic clouds are punched into the observed data
     (``estimate_flag=1`` there, with the true value retained as the learning
-    target) and real clouds become ``unavailable_flag=1``. How the synthetic
-    clouds are generated is controlled by ``options.data.cloud_mode`` (with the
-    related ``options.data.cloud_coverage`` / ``cloud_blob_sigma`` /
+    target) and real clouds become ``unavailable_flag=1``. Standardization
+    statistics are computed from the training dates in ``options.split`` and
+    recorded on ``options.data`` (bounds, input channel names/order, transforms,
+    standardization statistics, and target mean/std) so downstream functions and
+    the saved model bundle can reproduce these inputs.
+
+    Standardization is opt-in per group. ``options.data.features`` lists only
+    *extra* predictor variables from ``ds`` (never the target or its
+    ``observed_target`` / ``full_target`` variants -- that is rejected).
+    ``options.data.std_features`` selects which of those features are
+    standardized (each with its own statistics computed over the training
+    dates). ``options.data.std_target`` selects whether the target is
+    standardized: when ``True``, a single ``(mean, std)`` is computed from the
+    masked ``observed_target`` over the training dates and applied to
+    ``observed_target``, its temporal lags, and ``full_target`` so the
+    standardized inputs and the training label share one consistent scale;
+    ``target_mean`` / ``target_std`` record it. When ``False`` the target group
+    is left in raw (or log) units and ``target_mean`` / ``target_std`` are 0 / 1.
+    The returned dataset is
+    subset to just the dates needed for model fitting -- the union of the
+    training and validation dates in ``options.split`` -- rather than every date
+    in ``ds``; :func:`make_generator` later splits it back into train/val via
+    ``options.split``. Temporal lags are still computed from the full time
+    series before subsetting, so the lag channels for the returned days reflect
+    their true neighbours even when those neighbours are dropped. How the
+    synthetic clouds are generated is controlled by ``options.data.cloud_mode``
+    (with the related ``options.data.cloud_coverage`` / ``cloud_blob_sigma`` /
     ``cloud_time_sigma`` / ``missing_flag_shift`` / ``cloud_seed`` fields) --
     the cloud configuration is canonical on ``options`` and is not a call
     argument:
@@ -873,12 +884,12 @@ def prepare_model_data(
       ``cloud_blob_sigma``, day-to-day persistence by ``cloud_time_sigma``
       (``0`` = independent per composite; larger = clouds that last and evolve),
       and the target covered fraction by ``cloud_coverage``. ``cloud_seed``
-      (falling back to the run's global seed when a full :class:`Options` is
-      supplied) makes the clouds reproducible. The full ``(time, lat, lon)``
-      field is smoothed with :func:`synthetic_cloud_cube`, so this is the
-      original, more expensive path -- it materialises the whole cube in memory
-      and its cost grows with the size of the record. Use ``"synthetic_bank"``
-      for large, multi-year records.
+      (falling back to the run's global seed) makes the clouds reproducible. The
+      full ``(time, lat, lon)`` field is smoothed with
+      :func:`synthetic_cloud_cube`, so this is the original, more expensive
+      path -- it materialises the whole cube in memory and its cost grows with
+      the size of the record. Use ``"synthetic_bank"`` for large, multi-year
+      records.
     - ``cloud_mode="shift"`` reuses the historical behaviour: the real cloud
       mask ``missing_flag`` is rolled forward by ``missing_flag_shift`` time
       steps and those pixels are hidden. This borrows a real cloud pattern from
@@ -890,128 +901,160 @@ def prepare_model_data(
     (``unavailable_flag=1``) keeps that state and ``estimate_flag`` never
     overlaps ``unavailable_flag`` or ``land_flag``.
 
+    ``mode="test"`` builds the same self-supervised inputs as ``"train"``
+    (synthetic clouds punched in, ``estimate``/``observed``/``unavailable``
+    flags) but standardizes with the statistics already recorded on
+    ``options.data`` (from a prior ``"train"`` run) instead of recomputing them,
+    and does not modify ``options``. The whole passed-in ``ds`` is used; the
+    split is not consulted. This yields a held-out evaluation set that is
+    standardized identically to training.
+
     ``mode="gapfill"`` produces inference inputs for gap-filling. No synthetic
     clouds are created: ``observed_target`` is the real observed data,
     ``observed_flag`` marks the real observations, real cloud/NaN ocean pixels
     become ``estimate_flag=1`` (the pixels to fill), and ``unavailable_flag`` is
     0 everywhere. Every other channel (temporal lags, seasonal, geo, land) is
-    computed identically to training so the inputs match the trained model. In
-    this mode the split is not required and, when a resolved
-    :class:`DataOptions` is supplied, the recorded standardization statistics
-    are reused (``train_dates`` is ignored) so inputs match training exactly.
+    computed identically to training so the inputs match the trained model. The
+    recorded standardization statistics on ``options.data`` are reused so the
+    inputs match training exactly; the whole passed-in ``ds`` is used and the
+    split is not consulted.
 
-    Returns ``(output, stats)``. The recommended call is
-    ``prepare_model_data(ds, options)`` where ``options`` is the full
-    :class:`Options` object: the variable names/features/``log_target`` /
-    ``n_temporal_lags`` / ``add_geo`` come from ``options.data``, the output
-    chunking from ``options.gridder``, and ``train_dates`` from
-    ``options.split.train_selection()`` (do not pass ``train_dates`` yourself).
-    It raises with instructions if the split has not been chosen or selects
-    dates absent from ``ds``. Passing a :class:`DataOptions` as ``options`` is
-    also supported for advanced use. In ``mode="train"`` ``options.data`` is
-    populated in place with the canonical resolved data configuration (bounds,
-    input channel names/order, transforms, standardization statistics, and
-    target mean/std) so downstream functions and the saved model bundle can
-    reproduce these inputs; ``mode="gapfill"`` leaves ``options`` untouched.
+    Returns ``(output, stats)``.
     """
     from .options import Options as _Options
 
-    if mode not in ("train", "gapfill"):
+    if mode not in ("train", "test", "gapfill"):
         raise ValueError(
-            f"mode must be 'train' or 'gapfill', got {mode!r}"
+            f"mode must be 'train', 'test', or 'gapfill', got {mode!r}"
+        )
+    if not isinstance(options, _Options):
+        raise TypeError(
+            "options must be a full mindthegap.Options object; every setting "
+            "(variable names, cloud configuration, chunking, split, and "
+            "standardization) is read from it"
         )
 
-    # Accept the full Options object: pull the data/gridder/split sections from
-    # it, take train_dates from the resolved split, and validate consistency.
-    if isinstance(options, _Options):
-        full = options
-        if not full.data.is_resolved() and not full.data.target_variable:
+    full = options
+    if not full.data.is_resolved() and not full.data.target_variable:
+        raise ValueError(
+            "options.data is not configured; call "
+            "options.set_data_config(data=ds, metadata=...) first"
+        )
+
+    # train_dates are used to compute standardization statistics; the returned
+    # dataset is subset to the fitting dates (train + val). test and gapfill
+    # reuse the recorded statistics and standardize the whole ds.
+    train_dates = None
+    fit_dates = None
+    if mode == "train":
+        if not full.split.is_resolved():
             raise ValueError(
-                "options.data is not configured; call "
-                "options.set_data_config(data=ds, metadata=...) first"
+                "options.split has no dates; call "
+                "mtg.train_validation_dates(ds.time, options) before "
+                "building the standardized dataset"
             )
-        if mode == "train":
-            if not full.split.is_resolved():
-                raise ValueError(
-                    "options.split has no dates; call "
-                    "mtg.train_validation_dates(ds.time, options) before "
-                    "building the standardized dataset"
-                )
-            split_selection = full.split.train_selection()
-            available = pd.DatetimeIndex(
-                pd.to_datetime(np.asarray(ds["time"].values))
-            ).normalize()
-            chosen = pd.DatetimeIndex(split_selection).normalize()
-            missing_dates = chosen.difference(available)
-            if len(missing_dates) > 0:
-                sample = ", ".join(str(d.date()) for d in missing_dates[:3])
-                raise ValueError(
-                    "options.split is inconsistent with ds: "
-                    f"{len(missing_dates)} training date(s) are not in the "
-                    f"dataset time coordinate (e.g. {sample}). Re-run "
-                    "mtg.train_validation_dates on this dataset's ds.time."
-                )
-            if train_dates is None:
-                train_dates = split_selection
-        if gridder is None:
-            gridder = full.gridder
-        if verbose is None:
-            verbose = full.verbose
-        if cloud_seed is None:
-            cloud_seed = (
-                full.data.cloud_seed
-                if full.data.cloud_seed is not None
-                else full.resolved_seed()
+        split_selection = full.split.train_selection()
+        available = pd.DatetimeIndex(
+            pd.to_datetime(np.asarray(ds["time"].values))
+        ).normalize()
+        chosen = pd.DatetimeIndex(split_selection).normalize()
+        missing_dates = chosen.difference(available)
+        if len(missing_dates) > 0:
+            sample = ", ".join(str(d.date()) for d in missing_dates[:3])
+            raise ValueError(
+                "options.split is inconsistent with ds: "
+                f"{len(missing_dates)} training date(s) are not in the "
+                f"dataset time coordinate (e.g. {sample}). Re-run "
+                "mtg.train_validation_dates on this dataset's ds.time."
             )
-        options = full.data
+        train_dates = split_selection
+        # The returned dataset carries both the training and validation dates
+        # (everything model fitting needs); make_generator later splits it back
+        # into train/val via options.split. Statistics are still computed from
+        # train_dates only below.
+        val_selection = full.split.val_selection()
+        fit_index = pd.to_datetime(
+            np.concatenate(
+                [
+                    np.asarray(pd.to_datetime(split_selection)),
+                    np.asarray(pd.to_datetime(val_selection)),
+                ]
+            )
+        ).unique()
+        # Preserve chronological order to keep the time coordinate monotonic.
+        fit_dates = fit_index.sort_values()
 
-    if verbose is None:
-        verbose = False
+    if mode in ("test", "gapfill") and not full.data.standardization:
+        raise ValueError(
+            f"mode={mode!r} reuses the standardization statistics recorded "
+            "during training, but options.data.standardization is empty. Run "
+            "prepare_model_data(ds, options, mode='train') first (or load a "
+            "trained bundle into options)."
+        )
 
-    std_vars_supplied = std_vars is not None
-    # Synthetic-cloud configuration is canonical on options.data (never a call
-    # argument); fall back to the DataOptions defaults when options is omitted.
-    cloud_mode = "synthetic_bank"
-    coverage = 0.4
-    blob_sigma = 6.0
-    time_sigma = 2.0
-    missing_flag_shift = 10
-    if options is not None:
-        target_variable = (
-            target_variable
-            if target_variable is not None
-            else options.target_variable
-        )
-        missing_flag = (
-            missing_flag if missing_flag is not None else options.missing_flag
-        )
-        land_flag = land_flag if land_flag is not None else options.land_flag
-        if features is None:
-            features = options.features
-        if log_target is None:
-            log_target = options.log_target
-        if n_temporal_lags is None:
-            n_temporal_lags = options.n_temporal_lags
-        if add_geo is None:
-            add_geo = options.add_geo
-        cloud_mode = options.cloud_mode
-        coverage = options.cloud_coverage
-        blob_sigma = options.cloud_blob_sigma
-        time_sigma = options.cloud_time_sigma
-        missing_flag_shift = options.missing_flag_shift
-        if cloud_seed is None:
-            cloud_seed = options.cloud_seed
+    gridder = full.gridder
+    verbose = full.verbose
+    cloud_seed = (
+        full.data.cloud_seed
+        if full.data.cloud_seed is not None
+        else full.resolved_seed()
+    )
+    data_options = full.data
+
+    # Everything below reads the resolved data configuration from options.data.
+    target_variable = data_options.target_variable
+    missing_flag = data_options.missing_flag
+    land_flag = data_options.land_flag
+    features = list(data_options.features or [])
+    std_features = list(data_options.std_features or [])
+    std_target = bool(data_options.std_target)
+    log_target = bool(data_options.log_target)
+    n_temporal_lags = data_options.n_temporal_lags
+    add_geo = bool(data_options.add_geo)
+    cloud_mode = data_options.cloud_mode
+    coverage = data_options.cloud_coverage
+    blob_sigma = data_options.cloud_blob_sigma
+    time_sigma = data_options.cloud_time_sigma
+    missing_flag_shift = data_options.missing_flag_shift
+
+    # Synthetic clouds are punched in for both train and test; gapfill has none.
+    make_synthetic = mode in ("train", "test")
+    # test/gapfill reuse the recorded standardization instead of recomputing.
+    reuse_standardization = mode in ("test", "gapfill")
+    output_chunks = None
 
     if target_variable is None or missing_flag is None or land_flag is None:
         raise ValueError(
-            "target_variable, missing_flag, and land_flag must be provided "
-            "either directly or via options"
+            "options.data must define target_variable, missing_flag, and "
+            "land_flag; call options.set_data_config(...) first"
         )
-    log_target = False if log_target is None else log_target
     n_temporal_lags = 1 if n_temporal_lags is None else n_temporal_lags
-    add_geo = False if add_geo is None else add_geo
 
     features = list(features or [])
+    reserved_names = {
+        target_variable,
+        "full_target",
+        "observed_target",
+    }
+    for lag in range(1, (n_temporal_lags or 0) + 1):
+        reserved_names.add(f"observed_target_m{lag}")
+        reserved_names.add(f"observed_target_p{lag}")
+    illegal_features = [name for name in features if name in reserved_names]
+    if illegal_features:
+        raise ValueError(
+            "options.data.features must contain only extra predictor "
+            "variables, never the target or its variants; found "
+            f"{illegal_features}. Use options.data.std_target to standardize "
+            "the target."
+        )
+    unknown_std_features = [
+        name for name in std_features if name not in features
+    ]
+    if unknown_std_features:
+        raise ValueError(
+            "options.data.std_features must be a subset of "
+            f"options.data.features; unknown: {unknown_std_features}"
+        )
     required = [target_variable, *features, missing_flag, land_flag]
     missing = [name for name in required if name not in ds]
     if missing:
@@ -1075,10 +1118,10 @@ def prepare_model_data(
         )
 
     processed["land_flag"] = (processed[land_flag] == 1).astype("int8")
-    if mode == "train":
-        # Self-supervised training: punch synthetic gaps into the observed data.
-        # The hidden pixels become estimate_flag=1 (their true value is known
-        # and supplies the learning signal); real clouds become
+    if make_synthetic:
+        # Self-supervised training/test: punch synthetic gaps into the observed
+        # data. The hidden pixels become estimate_flag=1 (their true value is
+        # known and supplies the learning/evaluation signal); real clouds become
         # unavailable_flag=1.
         processed["unavailable_flag"] = (processed[missing_flag] == 1).astype(
             "int8"
@@ -1233,55 +1276,75 @@ def prepare_model_data(
                 xr.ones_like(day_of_year).astype("float32") * with_geo[name]
             ).transpose("time", "lat", "lon")
 
-    standardizable_vars = features + ["full_target", "observed_target"]
+    target_group = ["full_target", "observed_target"]
+    lag_vars = []
     for lag in range(1, n_temporal_lags + 1):
         previous = f"observed_target_m{lag}"
         following = f"observed_target_p{lag}"
         processed[previous] = processed["observed_target"].shift(time=lag)
         processed[following] = processed["observed_target"].shift(time=-lag)
-        standardizable_vars.extend([previous, following])
-
-    if std_vars_supplied:
-        std_vars = list(std_vars or [])
-    else:
-        std_vars = list(features)
-    unknown = sorted(set(std_vars) - set(standardizable_vars))
-    if unknown:
-        raise ValueError(
-            "std_vars contains unknown variables: " + ", ".join(unknown)
-        )
+        lag_vars.extend([previous, following])
+    target_group.extend(lag_vars)
+    standardizable_vars = features + target_group
 
     means = {name: 0.0 for name in standardizable_vars}
     standard_deviations = {name: 1.0 for name in standardizable_vars}
-    if mode == "gapfill" and options is not None and options.standardization:
-        # Reuse the standardization recorded at training time so gap-fill inputs
-        # match the trained model exactly; never recompute from the data.
-        saved = options.standardization
-        std_vars = [
-            name
-            for name in standardizable_vars
-            if saved.get(name, {}).get("applied")
-        ]
+    # applied_vars tracks which variables actually had standardization applied,
+    # so the recorded ``standardization`` metadata (and test/gapfill reuse) is
+    # exact. Feature standardization is controlled by options.data.std_features;
+    # target standardization by options.data.std_target.
+    applied_vars = []
+    if reuse_standardization:
+        # test/gapfill: reuse the standardization recorded at training time so
+        # inputs match the trained model exactly; never recompute from the data.
+        saved = data_options.standardization
         for name in standardizable_vars:
             if name in saved:
                 means[name] = float(saved[name].get("mean", 0.0))
                 standard_deviations[name] = float(saved[name].get("std", 1.0))
-    elif std_vars:
-        stats_source = processed[std_vars]
-        if train_dates is not None:
-            stats_source = stats_source.sel(time=train_dates)
-        computed_means = stats_source.mean(
-            dim=("time", "lat", "lon"),
-            skipna=True,
-        ).compute()
-        computed_stds = stats_source.std(
-            dim=("time", "lat", "lon"),
-            skipna=True,
-        ).compute()
-        for name in std_vars:
-            means[name] = float(computed_means[name].item())
-            standard_deviations[name] = float(computed_stds[name].item())
+                if saved[name].get("applied"):
+                    applied_vars.append(name)
+    else:
+        # Feature statistics: each standardized feature uses its own stats,
+        # computed over the training dates.
+        if std_features:
+            feat_source = processed[std_features]
+            if train_dates is not None:
+                feat_source = feat_source.sel(time=train_dates)
+            feat_means = feat_source.mean(
+                dim=("time", "lat", "lon"), skipna=True
+            ).compute()
+            feat_stds = feat_source.std(
+                dim=("time", "lat", "lon"), skipna=True
+            ).compute()
+            for name in std_features:
+                means[name] = float(feat_means[name].item())
+                standard_deviations[name] = float(feat_stds[name].item())
+                applied_vars.append(name)
+        # Target statistics: a single (mean, std) computed from the masked
+        # observed_target over the training dates, then shared by the whole
+        # target group (full_target, observed_target, and the temporal lags) so
+        # the standardized inputs and the training label share one scale.
+        if std_target:
+            tgt_source = processed["observed_target"]
+            if train_dates is not None:
+                tgt_source = tgt_source.sel(time=train_dates)
+            tgt_mean = float(
+                tgt_source.mean(dim=("time", "lat", "lon"), skipna=True)
+                .compute()
+                .item()
+            )
+            tgt_std = float(
+                tgt_source.std(dim=("time", "lat", "lon"), skipna=True)
+                .compute()
+                .item()
+            )
+            for name in target_group:
+                means[name] = tgt_mean
+                standard_deviations[name] = tgt_std
+                applied_vars.append(name)
 
+    std_vars = list(applied_vars)
     standardized = processed.copy()
     for name in std_vars:
         standardized[name] = (
@@ -1305,6 +1368,13 @@ def prepare_model_data(
         if dim in standardized.dims
     }
     output = standardized[output_vars].chunk(chunks)
+    if mode == "train" and fit_dates is not None:
+        # Return only the dates needed for model fitting (training + validation).
+        # Temporal lags were already computed from the full time series above
+        # (via shift), so the lag channels for the returned days still reflect
+        # their true neighbours even when those neighbours are dropped here.
+        # make_generator later splits this back into train/val via options.split.
+        output = output.sel(time=fit_dates)
     stats = {
         name: np.array(
             [means[name], standard_deviations[name]],
@@ -1313,30 +1383,34 @@ def prepare_model_data(
         for name in standardizable_vars
     }
 
-    if options is not None and mode == "train":
+    if mode == "train":
         input_names = [name for name in output_vars if name != "full_target"]
-        options.target = "full_target"
-        options.lat_bounds = (
+        data_options.target = "full_target"
+        data_options.lat_bounds = (
             float(output["lat"].min()),
             float(output["lat"].max()),
         )
-        options.lon_bounds = (
+        data_options.lon_bounds = (
             float(output["lon"].min()),
             float(output["lon"].max()),
         )
-        options.input_names = input_names
-        options.log_target = bool(log_target)
-        options.n_temporal_lags = n_temporal_lags
-        options.add_geo = bool(add_geo)
-        options.transforms = {
+        data_options.input_names = input_names
+        data_options.log_target = bool(log_target)
+        data_options.n_temporal_lags = n_temporal_lags
+        data_options.add_geo = bool(add_geo)
+        data_options.std_features = list(std_features)
+        data_options.std_target = bool(std_target)
+        data_options.transforms = {
             "target": "natural logarithm" if log_target else "none",
             "temporal_lags": n_temporal_lags,
             "add_geo": bool(add_geo),
+            "std_target": bool(std_target),
+            "std_features": list(std_features),
             "cloud_mode": cloud_mode,
             "cloud_seed": cloud_seed,
         }
         if cloud_mode in ("synthetic_bank", "synthetic"):
-            options.transforms.update(
+            data_options.transforms.update(
                 {
                     "cloud_coverage": coverage,
                     "cloud_blob_sigma": blob_sigma,
@@ -1344,10 +1418,10 @@ def prepare_model_data(
                 }
             )
             if bank_provenance:
-                options.transforms.update(bank_provenance)
+                data_options.transforms.update(bank_provenance)
         else:
-            options.transforms["missing_flag_shift"] = missing_flag_shift
-        options.standardization = {
+            data_options.transforms["missing_flag_shift"] = missing_flag_shift
+        data_options.standardization = {
             name: {
                 "mean": float(means[name]),
                 "std": float(standard_deviations[name]),
@@ -1355,9 +1429,9 @@ def prepare_model_data(
             }
             for name in standardizable_vars
         }
-        options.target_mean = float(means["full_target"])
-        options.target_std = float(standard_deviations["full_target"])
-        options.missing_value_handling = (
+        data_options.target_mean = float(means["full_target"])
+        data_options.target_std = float(standard_deviations["full_target"])
+        data_options.missing_value_handling = (
             "Missing predictor values are replaced with zero after "
             "standardization; mask channels identify land and missing data."
         )

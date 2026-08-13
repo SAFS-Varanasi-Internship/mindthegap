@@ -224,14 +224,15 @@ def test_data_options_log_target_defaults_false():
 
 def test_prepare_model_data_reads_config_from_options():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
-    options = Options.default()
+    options = Options.default(data=ds, metadata=metadata, seed=1)
     options.data.log_target = False
     options.data.n_temporal_lags = 2
     options.set_data_config(data=ds, metadata=metadata)
+    train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import prepare_model_data
 
-    _, stats = prepare_model_data(ds, options=options.data)
+    _, stats = prepare_model_data(ds, options, mode="train")
 
     assert options.data.is_resolved()
     assert options.data.transforms["temporal_lags"] == 2
@@ -243,12 +244,11 @@ def test_prepare_model_data_reads_config_from_options():
 def test_prepare_model_data_defaults_output_chunks_from_gridder():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
+    train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import prepare_model_data
 
-    output, _ = prepare_model_data(
-        ds, options=options.data, gridder=options.gridder
-    )
+    output, _ = prepare_model_data(ds, options, mode="train")
 
     time_chunk = options.gridder.time_chunk
     assert output.chunks["time"][0] == time_chunk
@@ -280,7 +280,7 @@ def test_prepare_model_data_accepts_full_options():
 
     from mindthegap import prepare_model_data
 
-    output, _ = prepare_model_data(ds, options)
+    output, _ = prepare_model_data(ds, options, mode="train")
 
     # train_dates and chunks come from options.split / options.gridder
     assert output.chunks["time"][0] == options.gridder.time_chunk
@@ -294,7 +294,7 @@ def test_prepare_model_data_errors_when_split_unset():
     from mindthegap import prepare_model_data
 
     with pytest.raises(ValueError, match="options.split has no dates"):
-        prepare_model_data(ds, options)
+        prepare_model_data(ds, options, mode="train")
 
 
 def test_prepare_model_data_errors_on_inconsistent_split():
@@ -306,18 +306,19 @@ def test_prepare_model_data_errors_on_inconsistent_split():
     from mindthegap import prepare_model_data
 
     with pytest.raises(ValueError, match="inconsistent with ds"):
-        prepare_model_data(ds, options)
+        prepare_model_data(ds, options, mode="train")
 
 
 def test_prepare_model_data_reads_add_geo_from_options():
     ds, metadata = demo_data(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
     options.data.add_geo = True
+    options.verbose = False
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import prepare_model_data
 
-    prepare_model_data(ds, options, verbose=False)
+    prepare_model_data(ds, options, mode="train")
 
     assert options.data.add_geo is True
     assert options.data.transforms["add_geo"] is True

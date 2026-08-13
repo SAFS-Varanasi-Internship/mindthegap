@@ -297,6 +297,15 @@ class DataOptions:
     ``cloud_seed`` (``None`` = inherit the global ``options.seed``) makes the
     clouds reproducible. :func:`mindthegap.prepare_model_data` reads these and
     never takes them as call arguments.
+
+    ``features`` lists *extra* variables from ``ds`` to include as model inputs;
+    it must never contain the target (or its ``observed_target`` / ``full_target``
+    variants). ``std_features`` selects which of those ``features`` are
+    standardized. ``std_target`` selects whether the target is standardized: when
+    ``True``, ``target_mean`` / ``target_std`` are computed from the masked
+    ``observed_target`` over the training dates and that standardization is
+    applied to ``observed_target``, its temporal lags, and ``full_target`` so the
+    inputs and the training label share one consistent scale.
     """
 
     source: Optional[str] = None
@@ -310,6 +319,8 @@ class DataOptions:
     missing_flag: Optional[str] = None
     land_flag: Optional[str] = None
     features: list = field(default_factory=list)
+    std_features: list = field(default_factory=list)
+    std_target: bool = False
     log_target: bool = False
     n_temporal_lags: int = 1
     add_geo: bool = False
@@ -336,6 +347,7 @@ class DataOptions:
         self.lon_bounds = _coerce_bounds(self.lon_bounds, "lon_bounds")
         self.input_names = list(self.input_names)
         self.features = list(self.features)
+        self.std_features = list(self.std_features)
         if self.cloud_mode not in ("synthetic_bank", "synthetic", "shift"):
             raise ValueError(
                 "cloud_mode must be 'synthetic_bank', 'synthetic', or "
