@@ -107,7 +107,7 @@ def test_load_model_bundle_reports_data_source(tmp_path, capsys):
 
 def test_save_requires_resolved_options(tmp_path):
     options = Options.default(seed=1)  # data section is unresolved
-    with pytest.raises(ValueError, match="not resolved"):
+    with pytest.raises(ValueError, match="prepare_model_data"):
         save_model_bundle(_model(), tmp_path / "bundle", options)
 
 

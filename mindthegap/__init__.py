@@ -27,6 +27,10 @@ from .gridder import (
     set_up_gridder,
     GridderRecommendation,
 )
+from .validation import (
+    validate_options,
+    OptionsValidationError,
+)
 from .options import (
     Options,
     DataOptions,
@@ -58,6 +62,8 @@ __all__ = [
     "load_model_bundle",
     "set_up_gridder",
     "GridderRecommendation",
+    "validate_options",
+    "OptionsValidationError",
     "Options",
     "DataOptions",
     "GridderOptions",
