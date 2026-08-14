@@ -46,37 +46,41 @@ def _frame(dataset, variable, date):
     return data
 
 
-def _standardization(metadata, variable):
-    values = metadata.get("preprocessing", {}).get(
-        "standardization", {}
-    ).get(variable, {})
-    return float(values.get("mean", 0.0)), float(values.get("std", 1.0))
+def _standardization(options, variable):
+    standardization = options.data.standardization
+    if variable not in standardization:
+        raise KeyError(
+            f"'{variable}' has no recorded standardization in "
+            "options.data.standardization; prepare_model_data(mode='gapfill') "
+            "must have standardized it"
+        )
+    values = standardization[variable]
+    return float(values["mean"]), float(values["std"])
 
 
 def observed_frame(
     dataset,
-    metadata,
+    options,
     date,
     target="full_target",
 ):
     """Return one observed target frame in the model's output units."""
     observed = _frame(dataset, target, date)
-    mean, std = _standardization(metadata, target)
+    mean, std = _standardization(options, target)
     return observed * std + mean
 
 
 def predict_frame(
     dataset,
     model,
-    metadata,
+    options,
     date,
     target="full_target",
 ):
     """Predict one frame using the bundle's recorded input channel order."""
-    inputs = metadata.get("inputs")
-    if not inputs:
-        raise ValueError("Bundle metadata does not define input channels")
-    names = [item["name"] for item in inputs]
+    names = list(options.data.input_names)
+    if not names:
+        raise ValueError("options.data.input_names is empty")
     frame = dataset.sel(time=date)
     missing = [name for name in names if name not in frame]
     if missing:
@@ -96,7 +100,7 @@ def predict_frame(
         raise ValueError(
             "Model prediction must have shape (1, lat, lon, channels)"
         )
-    mean, std = _standardization(metadata, target)
+    mean, std = _standardization(options, target)
     return xr.DataArray(
         prediction[0, ..., 0] * std + mean,
         dims=("lat", "lon"),
@@ -234,7 +238,7 @@ def _plot_map_panel(
 
 def plot_observed(
     dataset,
-    metadata,
+    options,
     date,
     *,
     target="full_target",
@@ -248,7 +252,7 @@ def plot_observed(
     observed = (
         observed
         if observed is not None
-        else observed_frame(dataset, metadata, date, target)
+        else observed_frame(dataset, options, date, target)
     )
     return _plot_map_panel(
         observed,
@@ -265,7 +269,7 @@ def plot_observed(
 def plot_prediction(
     dataset,
     model,
-    metadata,
+    options,
     date,
     *,
     target="full_target",
@@ -279,7 +283,7 @@ def plot_prediction(
     prediction = (
         prediction
         if prediction is not None
-        else predict_frame(dataset, model, metadata, date, target)
+        else predict_frame(dataset, model, options, date, target)
     )
     return _plot_map_panel(
         prediction,
@@ -319,7 +323,7 @@ def plot_flags(
 def plot_difference(
     dataset,
     model,
-    metadata,
+    options,
     date,
     *,
     target="full_target",
@@ -333,12 +337,12 @@ def plot_difference(
     observed = (
         observed
         if observed is not None
-        else observed_frame(dataset, metadata, date, target)
+        else observed_frame(dataset, options, date, target)
     )
     prediction = (
         prediction
         if prediction is not None
-        else predict_frame(dataset, model, metadata, date, target)
+        else predict_frame(dataset, model, options, date, target)
     )
     difference = observed - prediction
     return _plot_map_panel(
@@ -357,15 +361,15 @@ def plot_difference(
 def plot_prediction_observed(
     dataset,
     model,
-    metadata,
+    options,
     date,
     *,
     target="full_target",
     difference_limit=1.0,
 ):
     """Compose observed, flags, prediction, and difference panels."""
-    observed = observed_frame(dataset, metadata, date, target)
-    prediction = predict_frame(dataset, model, metadata, date, target)
+    observed = observed_frame(dataset, options, date, target)
+    prediction = predict_frame(dataset, model, options, date, target)
     flags = flag_frame(dataset, date)
     finite = np.concatenate(
         [
@@ -384,7 +388,7 @@ def plot_prediction_observed(
     )
     observed_image = plot_observed(
         dataset,
-        metadata,
+        options,
         date,
         target=target,
         observed=observed,
@@ -403,7 +407,7 @@ def plot_prediction_observed(
     plot_prediction(
         dataset,
         model,
-        metadata,
+        options,
         date,
         target=target,
         prediction=prediction,
@@ -415,7 +419,7 @@ def plot_prediction_observed(
     difference_image = plot_difference(
         dataset,
         model,
-        metadata,
+        options,
         date,
         target=target,
         observed=observed,

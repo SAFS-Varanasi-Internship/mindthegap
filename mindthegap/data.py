@@ -56,29 +56,31 @@ def _demo_data_call(
 
 def demo_data(
     dataset,
-    options,
     region=None,
     time_slice=None,
     *,
     smoke_test=False,
     smoke_days=120,
     smoke_size=128,
+    verbose=True,
 ):
-    """Load a real ocean-color dataset and configure ``options`` in place.
+    """Load a real ocean-color dataset and return it with its variable names.
 
     ``dataset`` may be ``"pace"``, ``"globcolour"``, ``"indian-ocean"``, or
     ``"io-shared-public"``. ``region`` may be a supported name or
     ``[lat_min, lat_max, lon_min, lon_max]``. ``None`` selects the full spatial
     extent.
 
-    ``options`` is the canonical source of truth: this loader resolves the
-    dataset-specific variable names (target, missing_flag, land_flag), identity,
-    spatial bounds, and time range directly onto ``options.data`` (via
-    :meth:`DataOptions.apply_dataset`) and then resolves the gridder/fit
-    heuristics via :meth:`Options.set_config`. The dataset name and source are
-    also stored on ``ds.attrs["dataset_name"]`` / ``ds.attrs["dataset_source"]``
-    when not already present. Only the loaded ``ds`` is returned; ``options`` is
-    mutated in place.
+    This loader does one thing: it loads a dataset and returns it. It does
+    **not** touch ``options`` -- configuring ``options`` is the job of
+    :meth:`Options.set_up_data_options`. The dataset name and source URL/path
+    are stored on ``ds.attrs["dataset_name"]`` / ``ds.attrs["dataset_source"]``
+    (when not already present), and the exact loading call is recorded on
+    ``ds.attrs["data_source"]`` so it can be replayed and saved with a bundle.
+
+    Returns ``(ds, target, missing_flag, land_flag)``: the loaded dataset and
+    the names of its target, missing-data (cloud) flag, and land flag variables,
+    which the caller passes to :meth:`Options.set_up_data_options`.
 
     When ``smoke_test`` is true, the loaded dataset is subset to at most
     ``smoke_days`` time steps and ``smoke_size`` cells in each spatial
@@ -124,27 +126,20 @@ def demo_data(
         ds.attrs["dataset_name"] = config["name"]
     if "dataset_source" not in ds.attrs:
         ds.attrs["dataset_source"] = config["dataset_source"]
+    if "product_id" not in ds.attrs:
+        ds.attrs["product_id"] = config["product_id"]
+    if region_name is not None and "region_name" not in ds.attrs:
+        ds.attrs["region_name"] = region_name
+    ds.attrs["data_source"] = data_source
 
-    options.data.apply_dataset(
-        ds,
-        target_variable=config["target"],
-        missing_flag=config["missing_flag"],
-        land_flag=config["land_flag"],
-        source=config["name"],
-        product_id=config["product_id"],
-        region_name=region_name,
-        data_source=data_source,
-    )
-    options.set_config(ds)
-
-    if options.verbose:
+    if verbose:
         print(f"Dataset: {ds.attrs['dataset_name']}")
-        print(f"  target:      {options.data.target_variable}")
-        print(f"  lat_bounds:  {options.data.lat_bounds}")
-        print(f"  lon_bounds:  {options.data.lon_bounds}")
-        print(f"  time_bounds: {options.data.time_bounds}")
+        print(f"  target:       {config['target']}")
+        print(f"  missing_flag: {config['missing_flag']}")
+        print(f"  land_flag:    {config['land_flag']}")
+        print(f"  dimensions:   {dict(ds.sizes)}")
 
-    return ds
+    return ds, config["target"], config["missing_flag"], config["land_flag"]
 
 
 def _dataset_config(dataset):
@@ -685,6 +680,12 @@ def prepare_model_data(ds, options, mode):
     be a full :class:`Options` object; ``mode`` is required and must be one of
     ``"train"``, ``"test"``, or ``"gapfill"``.
 
+    In ``mode="train"``, if ``options.split`` has not been resolved yet, the
+    train/validation dates are chosen automatically via
+    :func:`mindthegap.train_validation_dates` (reading the split method,
+    fractions, ``n_days``, and seed from ``options.split``); callers may still
+    call it explicitly beforehand for full control.
+
     The spatial dimensions of ``ds`` are first cropped so their lengths are a
     multiple of the U-Net's downsampling factor (see
     :func:`unet_spatial_multiple`) via :func:`crop_to_multiple`, so callers no
@@ -852,7 +853,8 @@ def prepare_model_data(ds, options, mode):
     if not full.data.is_resolved() and not full.data.target_variable:
         raise ValueError(
             "options.data is not configured; call "
-            "options.set_data_config(data=ds, metadata=...) first"
+            "options.set_up_data_options(ds, target=..., missing_flag=..., "
+            "land_flag=...) first"
         )
 
     # train_dates are used to compute standardization statistics; the returned
@@ -862,11 +864,9 @@ def prepare_model_data(ds, options, mode):
     fit_dates = None
     if mode == "train":
         if not full.split.is_resolved():
-            raise ValueError(
-                "options.split has no dates; call "
-                "mtg.train_validation_dates(ds.time, options) before "
-                "building the standardized dataset"
-            )
+            # Choose the train/validation dates from options.split (its method,
+            # fractions, n_days, seed) when the caller has not already done so.
+            train_validation_dates(ds["time"], full)
         split_selection = full.split.train_selection()
         available = pd.DatetimeIndex(
             pd.to_datetime(np.asarray(ds["time"].values))
@@ -940,7 +940,7 @@ def prepare_model_data(ds, options, mode):
     if target_variable is None or missing_flag is None or land_flag is None:
         raise ValueError(
             "options.data must define target_variable, missing_flag, and "
-            "land_flag; call options.set_data_config(...) first"
+            "land_flag; call options.set_up_data_options(...) first"
         )
     n_temporal_lags = 1 if n_temporal_lags is None else n_temporal_lags
 

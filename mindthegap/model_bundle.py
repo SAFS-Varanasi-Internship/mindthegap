@@ -1,37 +1,33 @@
-"""Portable Keras model bundles for local and hosted inference."""
+"""Portable Keras model bundles for local and hosted inference.
 
-from copy import deepcopy
+A bundle is a directory containing:
+
+``model.keras``
+    The trained Keras model.
+``options.json``
+    The complete resolved :class:`~mindthegap.Options` (:meth:`Options.to_dict`
+    serialized to JSON). ``options`` is the single source of truth for how the
+    model was set up -- variable names, features, transforms, temporal lags,
+    standardization statistics, channel order, split, and fit configuration.
+``README.md``
+    A human-readable model card generated from ``options`` and the repository
+    source (git) information.
+``make_dataset.py`` (optional)
+    A verbatim record of the script/code the user ran to create the ``ds``
+    passed to :func:`mindthegap.prepare_model_data`. ``options`` records every
+    setting *except* how the raw dataset was built, so this file preserves that
+    last piece for reproducibility.
+"""
+
+import json
 from pathlib import Path
 import subprocess
 
-import numpy as np
-import yaml
-
 
 MODEL_FILENAME = "model.keras"
-METADATA_FILENAME = "model_metadata.yaml"
+OPTIONS_FILENAME = "options.json"
 README_FILENAME = "README.md"
-REQUIRED_METADATA_SECTIONS = (
-    "dataset",
-    "inputs",
-    "target",
-    "preprocessing",
-)
-
-
-def _native(value):
-    """Convert NumPy and path values into YAML-safe Python values."""
-    if isinstance(value, np.ndarray):
-        return [_native(item) for item in value.tolist()]
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _native(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_native(item) for item in value]
-    return value
+DATASET_SCRIPT_FILENAME = "make_dataset.py"
 
 
 def _git_value(*args):
@@ -63,44 +59,27 @@ def _source_metadata():
     }
 
 
-def _validate_metadata(metadata):
-    missing = [
-        section
-        for section in REQUIRED_METADATA_SECTIONS
-        if section not in metadata
-    ]
-    if missing:
-        raise ValueError(
-            "metadata is missing required section(s): " + ", ".join(missing)
-        )
-    if not isinstance(metadata["inputs"], list) or not metadata["inputs"]:
-        raise ValueError("metadata['inputs'] must be a non-empty ordered list")
-    for channel, item in enumerate(metadata["inputs"]):
-        if not isinstance(item, dict) or "name" not in item:
-            raise ValueError("each metadata input must contain a name")
-        if item.get("channel", channel) != channel:
-            raise ValueError("metadata input channels must be ordered from zero")
+def _bounds_text(bounds):
+    if not bounds:
+        return "unknown"
+    return f"{bounds[0]} to {bounds[1]}"
 
 
-def _model_card(metadata):
-    model = metadata["model"]
-    dataset = metadata["dataset"]
-    target = metadata["target"]
+def _model_card(model_name, options, source, limitations, has_dataset_script):
+    data = options.data
     inputs = "\n".join(
-        f"- Channel {item['channel']}: `{item['name']}`"
-        for item in metadata["inputs"]
+        f"- Channel {channel}: `{name}`"
+        for channel, name in enumerate(data.input_names)
     )
-    preprocessing = metadata["preprocessing"]
-    region = dataset.get("region", "the documented domain")
-    if isinstance(region, dict):
-        region = ", ".join(
-            f"{name} {bounds[0]} to {bounds[1]}"
-            for name, bounds in region.items()
-        )
-    limitations = metadata.get(
-        "limitations",
-        "Use only with data matching the documented variables, domain, and "
-        "preprocessing.",
+    training_period = (
+        options.split.training_period() or "the documented training period"
+    )
+    dataset_note = (
+        "The exact script used to build the training dataset is recorded in "
+        f"`{DATASET_SCRIPT_FILENAME}`."
+        if has_dataset_script
+        else "The raw dataset was created by the user; see "
+        f"`{OPTIONS_FILENAME}` (`data.data_source`) for how it was obtained."
     )
     return f"""---
 library_name: keras
@@ -109,14 +88,15 @@ tags:
   - ocean-color
 ---
 
-# {model['name']}
+# {model_name}
 
-Keras model predicting **{target['name']}** for **{dataset['name']}**.
+Keras model predicting **{data.target_name or data.target_variable}** for
+**{data.source or 'the documented dataset'}**.
 
 ## Intended use
 
-This model is intended for {region}
-during {dataset.get('training_period', 'the documented training period')}.
+This model is intended for latitude {_bounds_text(data.lat_bounds)}, longitude
+{_bounds_text(data.lon_bounds)} during {training_period}.
 
 ## Inputs
 
@@ -124,10 +104,14 @@ during {dataset.get('training_period', 'the documented training period')}.
 
 ## Preprocessing
 
-Expected input shape: `{preprocessing['expected_input_shape']}`
+The complete resolved configuration is recorded in `{OPTIONS_FILENAME}`. Rebuild
+it with `mindthegap.load_model_bundle(path)`, which returns the model and the
+`Options` object, then run `mindthegap.prepare_model_data(ds, options,
+mode="gapfill")` to reproduce the model inputs exactly.
 
-Transforms and standardization parameters are recorded in
-`model_metadata.yaml`.
+Data source: `{data.data_source}`
+
+{dataset_note}
 
 ## Limitations
 
@@ -135,125 +119,85 @@ Transforms and standardization parameters are recorded in
 
 ## Source
 
-Repository: {metadata['source']['repository']}
+Repository: {source['repository']}
 
-Git commit: `{metadata['source']['git_commit']}`
+Git commit: `{source['git_commit']}`
 """
 
 
-def create_model_bundle_metadata(
+def _resolve_dataset_script(dataset_script):
+    """Return the source text to write to ``make_dataset.py``.
+
+    ``dataset_script`` may be a path to an existing ``.py`` file (its contents
+    are copied) or a string of Python source code (written verbatim).
+    """
+    if dataset_script is None:
+        return None
+    candidate = Path(dataset_script)
+    try:
+        is_file = candidate.is_file()
+    except OSError:
+        is_file = False
+    if is_file:
+        return candidate.read_text(encoding="utf-8")
+    return str(dataset_script)
+
+
+def save_model_bundle(
+    model,
     path,
+    options,
     *,
-    model_name,
-    dataset_metadata=None,
-    dataset_name=None,
-    product_id=None,
-    region=None,
-    training_period,
-    input_names,
-    target_name,
-    target_units,
-    expected_input_shape,
-    transforms,
-    standardization,
-    missing_value_handling,
-    data_source=None,
-    model_version="1.0",
+    model_name=None,
     limitations=None,
-    options=None,
+    dataset_script=None,
     overwrite=False,
 ):
-    """Create and save reviewable inference metadata for a model bundle."""
-    bundle_path = Path(path)
-    metadata_path = bundle_path / METADATA_FILENAME
-    if metadata_path.exists() and not overwrite:
-        raise FileExistsError(
-            f"Metadata already exists at {metadata_path}; use overwrite=True"
-        )
-    bundle_path.mkdir(parents=True, exist_ok=True)
+    """Save a Keras model bundle with its resolved options as the source of truth.
 
-    dataset_section = _native(deepcopy(dataset_metadata or {}))
-    resolved_data_source = data_source
-    if resolved_data_source is None and options is not None:
-        data_options = getattr(options, "data", options)
-        resolved_data_source = getattr(data_options, "data_source", None)
-    supplied_dataset_values = {
-        "name": dataset_name,
-        "product_id": product_id,
-        "region": region,
-        "training_period": training_period,
-        "data_source": resolved_data_source,
-    }
-    dataset_section.update(
-        {
-            key: value
-            for key, value in supplied_dataset_values.items()
-            if value is not None
-        }
-    )
-    dataset_section.setdefault("data_source", "user manual")
-    missing_dataset_values = [
-        key
-        for key in ("name", "product_id", "region", "training_period")
-        if key not in dataset_section
-    ]
-    if missing_dataset_values:
+    Writes ``model.keras``, ``options.json`` (the full resolved
+    :class:`~mindthegap.Options`), and a generated ``README.md`` model card into
+    ``path``. When ``dataset_script`` is provided it is written to
+    ``make_dataset.py`` as a verbatim record of how the training dataset was
+    created (``options`` records everything else).
+
+    Parameters
+    ----------
+    model : keras.Model
+        The trained model to save.
+    path : str or Path
+        Bundle directory to create.
+    options : mindthegap.Options
+        The resolved configuration (must have been run through
+        :func:`mindthegap.prepare_model_data` in ``mode="train"`` so the data
+        section is fully populated).
+    model_name : str, optional
+        Human-readable name for the model card. Defaults to a name derived from
+        the dataset source.
+    limitations : str, optional
+        Free-text limitations for the model card.
+    dataset_script : str or Path, optional
+        Path to a ``.py`` file, or a string of Python source, recording how the
+        raw dataset was built. Copied verbatim into ``make_dataset.py``.
+    overwrite : bool, default False
+        Overwrite an existing bundle.
+    """
+    if not options.data.is_resolved():
         raise ValueError(
-            "dataset metadata is missing: "
-            + ", ".join(missing_dataset_values)
+            "options.data is not resolved; run prepare_model_data(ds, options, "
+            "mode='train') before saving the bundle"
         )
 
-    metadata = {
-        "bundle_version": "1.0",
-        "model": {
-            "name": model_name,
-            "version": model_version,
-            "framework": "keras",
-        },
-        "dataset": dataset_section,
-        "inputs": [
-            {"name": name, "channel": channel}
-            for channel, name in enumerate(input_names)
-        ],
-        "target": {
-            "name": target_name,
-            "units": target_units,
-        },
-        "preprocessing": {
-            "expected_input_shape": expected_input_shape,
-            "transforms": transforms,
-            "standardization": standardization,
-            "missing_value_handling": missing_value_handling,
-        },
-        "limitations": limitations
-        or (
-            "Use only with the documented product, region, channel order, "
-            "and preprocessing."
-        ),
-        "source": _source_metadata(),
-    }
-    if options is not None:
-        metadata["options"] = _native(
-            options.to_dict() if hasattr(options, "to_dict") else options
-        )
-    prepared = _native(metadata)
-    _validate_metadata(prepared)
-    with metadata_path.open("w", encoding="utf-8") as file:
-        yaml.safe_dump(prepared, file, sort_keys=False)
-    return metadata_path
-
-
-def save_model_bundle(model, path, overwrite=False):
-    """Save a Keras model and model card beside reviewed bundle metadata."""
     bundle_path = Path(path)
-    metadata_path = bundle_path / METADATA_FILENAME
-    if not metadata_path.is_file():
-        raise FileNotFoundError(
-            f"Create and review {metadata_path} before saving the model"
-        )
     model_path = bundle_path / MODEL_FILENAME
+    options_path = bundle_path / OPTIONS_FILENAME
     readme_path = bundle_path / README_FILENAME
-    existing = [file.name for file in (model_path, readme_path) if file.exists()]
+    script_path = bundle_path / DATASET_SCRIPT_FILENAME
+
+    tracked = [model_path, options_path, readme_path]
+    if dataset_script is not None:
+        tracked.append(script_path)
+    existing = [file.name for file in tracked if file.exists()]
     if existing and not overwrite:
         raise FileExistsError(
             f"Bundle files already exist at {bundle_path}: "
@@ -261,23 +205,52 @@ def save_model_bundle(model, path, overwrite=False):
             + "; use overwrite=True"
         )
 
-    with metadata_path.open(encoding="utf-8") as file:
-        metadata = yaml.safe_load(file)
-    _validate_metadata(metadata)
-    model.save(bundle_path / MODEL_FILENAME)
+    bundle_path.mkdir(parents=True, exist_ok=True)
+
+    with options_path.open("w", encoding="utf-8") as file:
+        json.dump(options.to_dict(), file, indent=2, sort_keys=False)
+
+    resolved_name = model_name or (
+        f"{options.data.source} U-Net gap filler"
+        if options.data.source
+        else "U-Net gap filler"
+    )
+    resolved_limitations = limitations or (
+        "Use only with data matching the documented variables, domain, and "
+        "preprocessing."
+    )
+    script_source = _resolve_dataset_script(dataset_script)
     readme_path.write_text(
-        _model_card(metadata),
+        _model_card(
+            resolved_name,
+            options,
+            _source_metadata(),
+            resolved_limitations,
+            has_dataset_script=script_source is not None,
+        ),
         encoding="utf-8",
     )
+    if script_source is not None:
+        script_path.write_text(script_source, encoding="utf-8")
+
+    model.save(model_path)
     return bundle_path
 
 
 def load_model_bundle(path, compile=False):
-    """Load a local model bundle and return ``(model, metadata)``."""
+    """Load a model bundle and return ``(model, options)``.
+
+    ``options`` is reconstructed from ``options.json`` and is the full resolved
+    :class:`~mindthegap.Options` used to train the model. Replay it through
+    :func:`mindthegap.prepare_model_data` in ``mode="gapfill"`` to reproduce the
+    model inputs exactly.
+    """
+    from .options import Options
+
     bundle_path = Path(path)
     required = (
         bundle_path / MODEL_FILENAME,
-        bundle_path / METADATA_FILENAME,
+        bundle_path / OPTIONS_FILENAME,
         bundle_path / README_FILENAME,
     )
     missing = [file.name for file in required if not file.is_file()]
@@ -286,6 +259,9 @@ def load_model_bundle(path, compile=False):
             f"Incomplete model bundle at {bundle_path}; missing: "
             + ", ".join(missing)
         )
+
+    with (bundle_path / OPTIONS_FILENAME).open(encoding="utf-8") as file:
+        options = Options.from_dict(json.load(file))
 
     import keras
 
@@ -297,33 +273,6 @@ def load_model_bundle(path, compile=False):
     # with this U-Net/cuDNN combination.
     if not compile:
         model.jit_compile = False
-    with (bundle_path / METADATA_FILENAME).open(
-        encoding="utf-8"
-    ) as file:
-        metadata = yaml.safe_load(file)
-    _validate_metadata(metadata)
-    data_source = metadata.get("dataset", {}).get("data_source", "user manual")
-    print(f"Data loaded for this model with: {data_source}")
-    return model, metadata
 
-
-def options_from_bundle(metadata):
-    """Reconstruct an :class:`~mindthegap.Options` from bundle metadata.
-
-    The saved bundle records the resolved pipeline configuration under
-    ``metadata["options"]``. This rebuilds the :class:`Options` object so the
-    identical data configuration (variable names, transforms, temporal lags,
-    standardization, channel order) can be replayed through
-    :func:`mindthegap.prepare_model_data` in ``mode="gapfill"`` when
-    gap-filling with the loaded model. Raises if the metadata does not include a
-    saved options section.
-    """
-    from .options import Options
-
-    saved = metadata.get("options")
-    if not saved:
-        raise ValueError(
-            "bundle metadata has no 'options' section; cannot reconstruct "
-            "the data configuration used to train this model"
-        )
-    return Options.from_dict(saved)
+    print(f"Data loaded for this model with: {options.data.data_source}")
+    return model, options

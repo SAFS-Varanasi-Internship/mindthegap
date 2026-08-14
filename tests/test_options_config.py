@@ -181,11 +181,11 @@ def test_split_rejects_invalid_n_days(n_days):
         SplitOptions(n_days=n_days)
 
 
-def test_set_config_resolves_gridder_and_fit_not_split():
+def test_resolve_gridder_resolves_gridder_and_fit_not_split():
     ds, _ = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default()
 
-    result = options.set_config(ds)
+    result = options.resolve_gridder(ds)
 
     assert result is options
     assert options.gridder.tile_size == (16, 16)
@@ -205,16 +205,20 @@ def test_set_data_config_populates_data_from_metadata():
     assert options.data.missing_flag == "cloud_flag"
     assert options.data.land_flag == "land_flag"
     assert options.data.lat_bounds is not None
-    assert options.gridder.tile_size == (16, 16)
+    # set_data_config no longer resolves the gridder automatically.
+    assert options.gridder.tile_size == (64, 64)
     assert options.split.is_resolved() is False
 
 
-def test_default_with_data_resolves_configuration():
+def test_default_with_data_populates_data_but_not_gridder():
     ds, metadata = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
 
     options = Options.default(data=ds, metadata=metadata)
 
     assert options.data.target_variable == "chlor_a"
+    # Gridder is resolved explicitly, not by Options.default(data=...).
+    assert options.gridder.tile_size == (64, 64)
+    options.resolve_gridder(ds)
     assert options.gridder.tile_size == (16, 16)
 
 
@@ -228,6 +232,7 @@ def test_prepare_model_data_reads_config_from_options():
     options.data.log_target = False
     options.data.n_temporal_lags = 2
     options.set_data_config(data=ds, metadata=metadata)
+    options.resolve_gridder(ds)
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import prepare_model_data
@@ -245,6 +250,7 @@ def test_prepare_model_data_reads_config_from_options():
 def test_prepare_model_data_defaults_output_chunks_from_gridder():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
+    options.resolve_gridder(ds)
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import prepare_model_data
@@ -259,6 +265,7 @@ def test_smoke_test_caps_epochs():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
 
     options = Options.default(data=ds, metadata=metadata, smoke_test=True)
+    options.resolve_gridder(ds)
 
     assert options.smoke_test is True
     assert options.fit.epochs == 2
@@ -276,6 +283,7 @@ def test_options_verbose_default_true_and_roundtrips():
 def test_prepare_model_data_accepts_full_options():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
+    options.resolve_gridder(ds)
     options.verbose = False
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
@@ -288,14 +296,20 @@ def test_prepare_model_data_accepts_full_options():
     assert options.data.is_resolved()
 
 
-def test_prepare_model_data_errors_when_split_unset():
+def test_prepare_model_data_resolves_split_when_unset():
+    # mode="train" auto-chooses the split from options.split when the caller
+    # has not already run train_validation_dates.
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
-    options = Options.default(data=ds, metadata=metadata)
+    options = Options.default(data=ds, metadata=metadata, seed=3)
+    options.resolve_gridder(ds)
 
     from mindthegap import prepare_model_data
 
-    with pytest.raises(ValueError, match="options.split has no dates"):
-        prepare_model_data(ds, options, mode="train")
+    assert options.split.is_resolved() is False
+    prepare_model_data(ds, options, mode="train")
+    assert options.split.is_resolved() is True
+    assert len(options.split.train_dates) > 0
+    assert len(options.split.val_dates) > 0
 
 
 def test_prepare_model_data_errors_on_inconsistent_split():
