@@ -15,12 +15,13 @@ from conftest import make_demo_ds
 def _prepared(days=60, seed=3):
     ds, metadata = make_demo_ds(days=days, lat_size=16, lon_size=16, seed=seed)
     options = Options.default(data=ds, metadata=metadata)
+    options.resolve_gridder(ds)
     train_validation_dates(ds.time, options, seed=seed, verbose=False)
     ds_std = prepare_model_data(ds, options, mode="train")
     return ds, ds_std, options
 
 
-def test_split_starts_unresolved_after_set_config():
+def test_split_starts_unresolved_by_default():
     ds, metadata = make_demo_ds(days=60, lat_size=16, lon_size=16, seed=1)
     options = Options.default(data=ds, metadata=metadata)
 
@@ -97,6 +98,7 @@ def test_train_validation_dates_manual_empty_slice_errors():
 def test_make_generator_requires_resolved_split():
     ds, metadata = make_demo_ds(days=60, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata)
+    options.resolve_gridder(ds)
     train_validation_dates(ds.time, options, seed=3, verbose=False)
     ds_std = prepare_model_data(ds, options, mode="train")
     # Clear the split so make_generator has no dates to work with.
@@ -133,6 +135,7 @@ def test_make_generator_returns_datasets_and_steps():
 def test_prepare_model_data_defaults_chunks_from_gridder():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=2)
     options = Options.default(data=ds, metadata=metadata)
+    options.resolve_gridder(ds)
     train_validation_dates(ds.time, options, seed=2, verbose=False)
 
     ds_std = prepare_model_data(ds, options, mode="train")

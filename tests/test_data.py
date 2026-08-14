@@ -16,6 +16,7 @@ def _full_options(ds, metadata, *, resolve_split=True, seed=1, **cloud_kwargs):
     """
     options = Options.default(data=ds, metadata=metadata, seed=seed)
     options.verbose = False
+    options.resolve_gridder(ds)
     for key, value in cloud_kwargs.items():
         setattr(options.data, key, value)
     if resolve_split:
@@ -409,6 +410,5 @@ def test_make_demo_ds_rejects_invalid_arguments(kwargs):
 def test_demo_data_rejects_unknown_dataset():
     from mindthegap.data import demo_data
 
-    options = Options.default()
     with pytest.raises(ValueError, match="Unknown dataset"):
-        demo_data(dataset="unknown", options=options)
+        demo_data(dataset="unknown")

@@ -375,11 +375,11 @@ class DataOptions:
     ):
         """Populate identity/variable configuration directly from a dataset.
 
-        Called by :func:`mindthegap.demo_data` (the canonical loader) so that
-        ``options`` -- not a separate metadata dict -- is the single source of
-        truth for the variable names, dataset identity, spatial bounds, and time
-        range. Standardization statistics and input channel order are filled in
-        later by :func:`mindthegap.prepare_model_data`.
+        Called by :meth:`set_up_data_options` so that ``options`` -- not a
+        separate metadata dict -- is the single source of truth for the variable
+        names, dataset identity, spatial bounds, and time range. Standardization
+        statistics and input channel order are filled in later by
+        :func:`mindthegap.prepare_model_data`.
         """
         import pandas as pd
 
@@ -492,10 +492,12 @@ class Options:
 
         ``data`` starts unresolved and is populated by the pipeline. When a
         loaded dataset ``data`` (and its ``metadata``) is supplied, the
-        data-dependent sections are resolved immediately via
-        :meth:`set_data_config`. When ``smoke_test`` is true the run is
-        configured to be fast (``fit.epochs`` is capped at 2); the user can
-        still override ``fit.epochs`` afterwards.
+        data-dependent variable names/bounds are populated via
+        :meth:`set_data_config`. The gridder/fit heuristics are **not** resolved
+        automatically; call :meth:`resolve_gridder` explicitly to derive tiling
+        from the dataset. When ``smoke_test`` is true the run is configured to be
+        fast (``fit.epochs`` is capped at 2 once the gridder is resolved); the
+        user can still override ``fit.epochs`` afterwards.
 
         ``seed`` is the single global seed inherited by the per-stage seeds
         (date sampling, ``tf.data`` shuffling, future synthetic clouds). When
@@ -549,31 +551,84 @@ class Options:
         self.fit = replace(self.fit, tf_seed=seed)
         return self
 
+    def set_up_data_options(
+        self,
+        ds,
+        *,
+        target,
+        missing_flag,
+        land_flag,
+        log_target=False,
+        features=(),
+        std_features=(),
+        std_target=False,
+        add_geo=False,
+        n_temporal_lags=1,
+    ):
+        """Populate ``options.data`` from a loaded dataset (user-specified).
+
+        The user specifies exactly what they want -- ``target``, ``missing_flag``
+        and ``land_flag`` are required (no defaults); the remaining preprocessing
+        choices are optional keyword arguments. This reads identity, spatial
+        bounds, and time range directly from ``ds`` (and its ``attrs`` written by
+        :func:`mindthegap.demo_data`).
+
+        This does **not** resolve the gridder or fit configuration from the
+        dataset; that is a separate, explicit step (set ``options.gridder`` /
+        ``options.fit`` yourself, or call :meth:`resolve_gridder`). The
+        train/validation split is also left unresolved. Standardization
+        statistics and the final input channel order are filled in later by
+        :func:`mindthegap.prepare_model_data`. Returns ``self`` for chaining.
+        """
+        for name in (target, missing_flag, land_flag):
+            if name not in ds:
+                raise KeyError(
+                    f"{name!r} is not a variable in ds; pass variable names "
+                    "that exist in the dataset"
+                )
+
+        self.data.apply_dataset(
+            ds,
+            target_variable=target,
+            missing_flag=missing_flag,
+            land_flag=land_flag,
+            source=ds.attrs.get("dataset_name"),
+            product_id=ds.attrs.get("product_id"),
+            region_name=ds.attrs.get("region_name"),
+            data_source=ds.attrs.get("data_source", "user manual"),
+        )
+        self.data.features = list(features)
+        self.data.std_features = list(std_features)
+        self.data.std_target = bool(std_target)
+        self.data.log_target = bool(log_target)
+        self.data.add_geo = bool(add_geo)
+        self.data.n_temporal_lags = int(n_temporal_lags)
+        return self
+
     def set_data_config(self, data, metadata=None):
-        """Resolve all data-dependent configuration from a dataset.
+        """Populate all data-dependent configuration from a dataset.
 
         Populates ``options.data`` from the dataset and its loader
-        ``metadata`` (variable names, identity, bounds, available period), then
-        derives the gridder and fit sections from the dataset via
-        :meth:`set_config`. The train/validation split is *not* set here; call
-        :func:`mindthegap.train_validation_dates` to choose it. Returns
-        ``self`` for chaining. Call after the dataset is loaded and cropped.
+        ``metadata`` (variable names, identity, bounds, available period). The
+        gridder/fit heuristics and the train/validation split are *not* resolved
+        here -- set the gridder explicitly (or call :meth:`resolve_gridder`) and
+        call :func:`mindthegap.train_validation_dates` to choose the split.
+        Returns ``self`` for chaining. Call after the dataset is loaded and
+        cropped.
         """
         if metadata is not None:
             self.data.load_from(data, metadata)
-        self.set_config(data)
         return self
 
-    def set_config(self, ds):
-        """Resolve dataset-derived heuristics for the non-data sections.
+    def resolve_gridder(self, ds):
+        """Resolve dataset-derived gridder/fit heuristics from ``ds``.
 
         Derives tile size and time chunk (``gridder``) and the batch size
-        (``fit``) from the dataset so these heuristics live in the package
-        rather than in notebooks. When ``smoke_test`` is set, ``fit.epochs`` is
-        capped at 2 for a fast validation run. The train/validation split is
-        left unresolved until the user selects one via
-        :func:`mindthegap.train_validation_dates`. Returns ``self`` for
-        chaining.
+        (``fit``) from the dataset. This is an *explicit*, opt-in step: neither
+        :func:`mindthegap.demo_data` nor :meth:`set_up_data_options` resolves the
+        gridder automatically, so the user controls tiling. When ``smoke_test``
+        is set, ``fit.epochs`` is capped at 2 for a fast validation run. Returns
+        ``self`` for chaining.
         """
         self.gridder = self.gridder.resolve_for(ds)
         self.fit = self.fit.resolve_for(self.gridder.tile_size)
