@@ -31,6 +31,10 @@ from .validation import (
     validate_options,
     OptionsValidationError,
 )
+from .training import (
+    train_model,
+    TrainingResult,
+)
 from .options import (
     Options,
     DataOptions,
@@ -64,6 +68,8 @@ __all__ = [
     "GridderRecommendation",
     "validate_options",
     "OptionsValidationError",
+    "train_model",
+    "TrainingResult",
     "Options",
     "DataOptions",
     "GridderOptions",

@@ -40,6 +40,23 @@ def _to_plain(value):
     return value
 
 
+def _flatten(value, sep=".", _prefix=""):
+    """Flatten nested dict data into a single dict of dotted keys.
+
+    Lists/scalars are kept as leaf values; only nested dictionaries are
+    expanded, so tracker-friendly keys such as ``"gridder.tile_size"`` map to a
+    plain list rather than being split element-by-element.
+    """
+    flat = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f"{_prefix}{sep}{key}" if _prefix else str(key)
+            flat.update(_flatten(item, sep=sep, _prefix=child))
+    else:
+        flat[_prefix] = value
+    return flat
+
+
 def _coerce_pair(value, name):
     """Return a two-element integer tuple, accepting scalars and sequences."""
     if value is None:
@@ -570,6 +587,22 @@ class Options:
     def to_dict(self):
         """Serialize the whole configuration to plain JSON/YAML-safe data."""
         return _to_plain(self)
+
+    def to_flat_dict(self, sep="."):
+        """Return a flat, tracker-friendly mapping of the configuration.
+
+        Nested sections are flattened into dotted keys (for example
+        ``"gridder.tile_size"`` or ``"fit.epochs"``) and scalar/list values are
+        left as JSON-safe plain data, which is the shape experiment trackers
+        such as MLflow / W&B expect for ``log_params``::
+
+            mlflow.log_params(options.to_flat_dict())
+
+        Nested dictionaries inside a section (for example the resolved
+        ``data.standardization`` statistics) are flattened with the same
+        separator. ``sep`` sets the key separator (default ``"."``).
+        """
+        return _flatten(self.to_dict(), sep=sep)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Options":
