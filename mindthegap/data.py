@@ -847,6 +847,7 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
     full preparation. ``mode`` still selects which flag channels are built.
     """
     from .options import Options as _Options
+    from .validation import validate_options, OptionsValidationError
 
     if mode not in ("train", "test", "gapfill"):
         raise ValueError(
@@ -860,12 +861,9 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         )
 
     full = options
-    if not full.data.is_resolved() and not full.data.target_variable:
-        raise ValueError(
-            "options.data is not configured; call "
-            "options.set_up_data_options(ds, target=..., missing_flag=..., "
-            "land_flag=...) first"
-        )
+    # The target/mask variable names must be configured for every mode; the
+    # detailed, how-to-fix message lives in validate_options.
+    validate_options(full, requires=["data"])
 
     # train_dates are used to compute standardization statistics; the returned
     # dataset is subset to the fitting dates (train + val). test and gapfill
@@ -909,11 +907,13 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         fit_dates = fit_index.sort_values()
 
     if mode in ("test", "gapfill") and not dry_run and not full.data.standardization:
-        raise ValueError(
-            f"mode={mode!r} reuses the standardization statistics recorded "
-            "during training, but options.data.standardization is empty. Run "
-            "prepare_model_data(ds, options, mode='train') first (or load a "
-            "trained bundle into options)."
+        raise OptionsValidationError(
+            f"options is missing configuration required for mode={mode!r}:\n"
+            "  - options.data.standardization is empty, so there are no "
+            "recorded statistics to reuse. mode='test'/'gapfill' reuse the "
+            "standardization computed during training; run mtg.prepare_model_data"
+            "(ds, options, mode='train') first (or load a trained bundle with "
+            "mtg.load_model_bundle)."
         )
 
     gridder = full.gridder
@@ -951,11 +951,6 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
     reuse_standardization = mode in ("test", "gapfill") and not dry_run
     output_chunks = None
 
-    if target_variable is None or missing_flag is None or land_flag is None:
-        raise ValueError(
-            "options.data must define target_variable, missing_flag, and "
-            "land_flag; call options.set_up_data_options(...) first"
-        )
     n_temporal_lags = 1 if n_temporal_lags is None else n_temporal_lags
 
     features = list(features or [])

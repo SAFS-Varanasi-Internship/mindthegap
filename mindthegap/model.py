@@ -133,18 +133,13 @@ def make_generator(ds_std, options, *, verbose=None):
     ``ds_val`` or step counts. ``verbose`` defaults to ``options.verbose``.
     """
     import tensorflow as tf
+    from .validation import validate_options
 
     if verbose is None:
         verbose = options.verbose
-    if not options.split.is_resolved():
-        raise ValueError(
-            "options.split has no dates; call mtg.train_validation_dates first"
-        )
-    if options.gridder.method != "xbatcher":
-        raise ValueError(
-            f"Unsupported gridder method {options.gridder.method!r}; "
-            "only 'xbatcher' is currently supported"
-        )
+    # make_generator needs the resolved split (which dates train/validate) and a
+    # supported gridder; validate_options gives the how-to-fix guidance.
+    validate_options(options, requires=["split", "gridder"])
 
     ds_train = ds_std.sel(time=options.split.train_selection())
     ds_val = ds_std.sel(time=options.split.val_selection())
@@ -452,9 +447,12 @@ def gapfill_std(ds_std, model, options, *, time=None, verbose=None):
         holding the raw model output in standardized space (no unstandardizing
         or de-logging applied).
     """
+    from .validation import validate_options
+
+    # gapfill_std needs the recorded channel order/standardization from a
+    # training preparation pass; validate_options explains how to obtain them.
+    validate_options(options, requires=["data_prepared"])
     names = list(options.data.input_names)
-    if not names:
-        raise ValueError("options.data.input_names is empty")
     missing = [name for name in names if name not in ds_std]
     if missing:
         raise KeyError(

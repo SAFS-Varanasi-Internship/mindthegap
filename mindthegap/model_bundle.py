@@ -182,11 +182,11 @@ def save_model_bundle(
     overwrite : bool, default False
         Overwrite an existing bundle.
     """
-    if not options.data.is_resolved():
-        raise ValueError(
-            "options.data is not resolved; run prepare_model_data(ds, options, "
-            "mode='train') before saving the bundle"
-        )
+    from .validation import validate_options
+
+    # A saved bundle must carry the resolved channel order/standardization so it
+    # can be reloaded and reused; validate_options explains how to produce them.
+    validate_options(options, requires=["data_prepared"])
 
     bundle_path = Path(path)
     model_path = bundle_path / MODEL_FILENAME

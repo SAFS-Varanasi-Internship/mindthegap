@@ -237,7 +237,6 @@ def test_prepare_model_data_test_and_gapfill_require_prior_stats():
         with pytest.raises(ValueError, match="standardization is empty"):
             prepare_model_data(ds, options, mode=mode)
 
-
 def test_prepare_model_data_rejects_bad_mode():
     ds, metadata = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=3)
     options = _full_options(ds, metadata)
