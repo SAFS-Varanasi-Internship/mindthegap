@@ -23,6 +23,10 @@ from .model_bundle import (
     load_model_bundle,
     save_model_bundle,
 )
+from .gridder import (
+    set_up_gridder,
+    GridderRecommendation,
+)
 from .options import (
     Options,
     DataOptions,
@@ -52,6 +56,8 @@ __all__ = [
     "UNet",
     "save_model_bundle",
     "load_model_bundle",
+    "set_up_gridder",
+    "GridderRecommendation",
     "Options",
     "DataOptions",
     "GridderOptions",

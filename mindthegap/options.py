@@ -58,11 +58,10 @@ class GridderOptions:
     """How the prepared dataset is split into spatial/temporal patches.
 
     ``tile_size`` may be an int, a ``(lat, lon)`` pair, or the string
-    ``"full"``. Use ``"full"`` to train on the entire field as a single tile:
-    :meth:`resolve_for` then sets ``tile_size`` to the full ``(lat, lon)`` size
-    of the dataset (which is already a multiple of ``tile_multiple`` because the
-    pipeline crops the field with ``crop_to_multiple`` before standardizing),
-    ignoring ``tile_upper_limit``.
+    ``"full"``. Use ``"full"`` to treat the entire field as a single tile.
+    These settings are used exactly as given -- the pipeline never auto-derives
+    or adjusts them from the dataset (a separate tile-selection step may do that
+    before :func:`mindthegap.prepare_model_data` is called).
     """
 
     method: str = "xbatcher"
@@ -70,8 +69,6 @@ class GridderOptions:
     overlap: Optional[tuple] = None
     time_chunk: int = 100
     preload_batch: bool = False
-    tile_upper_limit: int = 64
-    tile_multiple: int = 8
 
     def __post_init__(self):
         if not self._is_full(self.tile_size):
@@ -89,53 +86,6 @@ class GridderOptions:
     def _is_full(value):
         """Return True when ``value`` requests the full field as one tile."""
         return isinstance(value, str) and value.lower() == "full"
-
-    def _tile_length(self, size, chunk):
-        """Largest tile length that fits the data, chunk, and cap.
-
-        When the cap (``tile_upper_limit``) and on-disk chunk are both large
-        enough to span the whole dimension, the full dataset length is used so
-        the tile defaults to the entire grid instead of being trimmed down to a
-        multiple of ``tile_multiple``.
-        """
-        available = min(size, chunk, self.tile_upper_limit)
-        if available >= size:
-            return size
-        aligned = available - available % self.tile_multiple
-        if aligned < self.tile_multiple:
-            raise ValueError(
-                f"dimension must contain at least {self.tile_multiple} cells"
-            )
-        return aligned
-
-    def resolve_for(self, ds):
-        """Return a copy with tile_size and time_chunk derived from ``ds``.
-
-        Tile lengths are inferred from the dataset sizes and on-disk chunks,
-        capped by ``tile_upper_limit`` and aligned to ``tile_multiple``. The
-        time chunk targets roughly six blocks across the record.
-
-        When ``tile_size`` is ``"full"`` the cap is ignored and the tile spans
-        the entire ``(lat, lon)`` field (a single big tile).
-        """
-        chunk_sizes = getattr(ds, "chunksizes", {})
-
-        def chunk0(dim):
-            values = chunk_sizes.get(dim, (ds.sizes[dim],))
-            return values[0] if values else ds.sizes[dim]
-
-        if self._is_full(self.tile_size):
-            tile_lat = ds.sizes["lat"]
-            tile_lon = ds.sizes["lon"]
-        else:
-            tile_lat = self._tile_length(ds.sizes["lat"], chunk0("lat"))
-            tile_lon = self._tile_length(ds.sizes["lon"], chunk0("lon"))
-        time_chunk = min(100, max(1, ds.sizes["time"] // 6))
-        return replace(
-            self,
-            tile_size=(tile_lat, tile_lon),
-            time_chunk=time_chunk,
-        )
 
     def patch_dims(self):
         """Return the xbatcher ``input_dims`` mapping for this configuration."""
@@ -167,7 +117,6 @@ class FitOptions:
     loss: str = "mse"
     optimizer: str = "adam"
     shuffle_buffer: int = 512
-    pixel_budget: int = 40 * 56 * 16
     shuffle_seed: Optional[int] = None
     tf_seed: Optional[int] = None
 
@@ -180,16 +129,6 @@ class FitOptions:
             raise ValueError("learning_rate must be positive")
         if self.patience < 0:
             raise ValueError("patience must be non-negative")
-
-    def resolve_for(self, tile_size):
-        """Return a copy with ``batch_size`` scaled to the tile pixel budget.
-
-        ``batch_size`` is capped so ``batch_size * tile_pixels`` stays within
-        ``pixel_budget``.
-        """
-        pixels_per_tile = max(1, tile_size[0] * tile_size[1])
-        batch_size = max(1, min(16, self.pixel_budget // pixels_per_tile))
-        return replace(self, batch_size=batch_size)
 
     @classmethod
     def from_dict(cls, data):
@@ -493,11 +432,13 @@ class Options:
         ``data`` starts unresolved and is populated by the pipeline. When a
         loaded dataset ``data`` (and its ``metadata``) is supplied, the
         data-dependent variable names/bounds are populated via
-        :meth:`set_data_config`. The gridder/fit heuristics are **not** resolved
-        automatically; call :meth:`resolve_gridder` explicitly to derive tiling
-        from the dataset. When ``smoke_test`` is true the run is configured to be
-        fast (``fit.epochs`` is capped at 2 once the gridder is resolved); the
-        user can still override ``fit.epochs`` afterwards.
+        :meth:`set_data_config`. The gridder is **not** derived from the
+        dataset -- it is used exactly as set on ``options.gridder`` (default
+        ``(64, 64)`` tiles, ``time_chunk=100``); set it yourself for different
+        tiling. When ``smoke_test`` is true the run is configured to be fast: a
+        small ``(16, 16)`` tile with ``time_chunk=10`` (so the tiny synthetic
+        datasets used for smoke tests fit) and ``fit.epochs`` capped at 2. The
+        user can still override any of these afterwards.
 
         ``seed`` is the single global seed inherited by the per-stage seeds
         (date sampling, ``tf.data`` shuffling, future synthetic clouds). When
@@ -508,6 +449,11 @@ class Options:
         :meth:`seed_tensorflow` for a fully deterministic run.
         """
         options = cls(smoke_test=smoke_test, seed=seed)
+        if smoke_test:
+            options.gridder = replace(
+                options.gridder, tile_size=(16, 16), time_chunk=10
+            )
+            options.fit = replace(options.fit, epochs=min(options.fit.epochs, 2))
         if data is not None:
             options.set_data_config(data=data, metadata=metadata)
         return options
@@ -574,11 +520,12 @@ class Options:
         :func:`mindthegap.demo_data`).
 
         This does **not** resolve the gridder or fit configuration from the
-        dataset; that is a separate, explicit step (set ``options.gridder`` /
-        ``options.fit`` yourself, or call :meth:`resolve_gridder`). The
-        train/validation split is also left unresolved. Standardization
-        statistics and the final input channel order are filled in later by
-        :func:`mindthegap.prepare_model_data`. Returns ``self`` for chaining.
+        dataset. The gridder is used exactly as set on ``options.gridder``
+        (default ``(64, 64)`` tiles, ``time_chunk=100``); set it yourself if you
+        want different tiling. The train/validation split is also left
+        unresolved. Standardization statistics and the final input channel order
+        are filled in later by :func:`mindthegap.prepare_model_data`. Returns
+        ``self`` for chaining.
         """
         for name in (target, missing_flag, land_flag):
             if name not in ds:
@@ -610,30 +557,14 @@ class Options:
 
         Populates ``options.data`` from the dataset and its loader
         ``metadata`` (variable names, identity, bounds, available period). The
-        gridder/fit heuristics and the train/validation split are *not* resolved
-        here -- set the gridder explicitly (or call :meth:`resolve_gridder`) and
-        call :func:`mindthegap.train_validation_dates` to choose the split.
-        Returns ``self`` for chaining. Call after the dataset is loaded and
-        cropped.
+        gridder/fit configuration and the train/validation split are *not*
+        resolved here -- the gridder is used exactly as set on
+        ``options.gridder`` (set it yourself if you want different tiling) and
+        :func:`mindthegap.train_validation_dates` chooses the split. Returns
+        ``self`` for chaining. Call after the dataset is loaded and cropped.
         """
         if metadata is not None:
             self.data.load_from(data, metadata)
-        return self
-
-    def resolve_gridder(self, ds):
-        """Resolve dataset-derived gridder/fit heuristics from ``ds``.
-
-        Derives tile size and time chunk (``gridder``) and the batch size
-        (``fit``) from the dataset. This is an *explicit*, opt-in step: neither
-        :func:`mindthegap.demo_data` nor :meth:`set_up_data_options` resolves the
-        gridder automatically, so the user controls tiling. When ``smoke_test``
-        is set, ``fit.epochs`` is capped at 2 for a fast validation run. Returns
-        ``self`` for chaining.
-        """
-        self.gridder = self.gridder.resolve_for(ds)
-        self.fit = self.fit.resolve_for(self.gridder.tile_size)
-        if self.smoke_test:
-            self.fit = replace(self.fit, epochs=min(self.fit.epochs, 2))
         return self
 
     def to_dict(self):

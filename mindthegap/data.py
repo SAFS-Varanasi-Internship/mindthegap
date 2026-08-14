@@ -669,7 +669,7 @@ def _resolve_chunks(ds, gridder):
     return {"time": time_chunk, "lat": lat_chunk, "lon": lon_chunk}
 
 
-def prepare_model_data(ds, options, mode):
+def prepare_model_data(ds, options, mode, *, dry_run=False):
     """Prepare model inputs, targets, and standardization statistics.
 
     ``options`` is the canonical source of every setting -- variable
@@ -835,6 +835,16 @@ def prepare_model_data(ds, options, mode):
     ``options.data`` -- ``options.data.standardization``,
     ``options.data.target_mean``, and ``options.data.target_std`` -- rather than
     returned separately, so ``options`` remains the single source of truth.
+
+    When ``dry_run=True`` this is a fast, side-effect-free *probe*: the field
+    is cropped and the full lazy channel graph is built so the returned dataset
+    has the exact shape, ``input_names``/channel order, and chunking that a real
+    run would produce, but the expensive/irreversible steps are skipped --
+    standardization statistics are **not** computed, synthetic clouds are **not**
+    generated, the train/validation split is **not** resolved, and ``options``
+    is **not** mutated. Use it to inspect ``ds_std.sizes`` / ``ds_std.data_vars``
+    (for example from :func:`mindthegap.set_up_gridder`) without paying for a
+    full preparation. ``mode`` still selects which flag channels are built.
     """
     from .options import Options as _Options
 
@@ -862,7 +872,7 @@ def prepare_model_data(ds, options, mode):
     # reuse the recorded statistics and standardize the whole ds.
     train_dates = None
     fit_dates = None
-    if mode == "train":
+    if mode == "train" and not dry_run:
         if not full.split.is_resolved():
             # Choose the train/validation dates from options.split (its method,
             # fractions, n_days, seed) when the caller has not already done so.
@@ -898,7 +908,7 @@ def prepare_model_data(ds, options, mode):
         # Preserve chronological order to keep the time coordinate monotonic.
         fit_dates = fit_index.sort_values()
 
-    if mode in ("test", "gapfill") and not full.data.standardization:
+    if mode in ("test", "gapfill") and not dry_run and not full.data.standardization:
         raise ValueError(
             f"mode={mode!r} reuses the standardization statistics recorded "
             "during training, but options.data.standardization is empty. Run "
@@ -932,9 +942,13 @@ def prepare_model_data(ds, options, mode):
     missing_flag_shift = data_options.missing_flag_shift
 
     # Synthetic clouds are punched in for both train and test; gapfill has none.
-    make_synthetic = mode in ("train", "test")
-    # test/gapfill reuse the recorded standardization instead of recomputing.
-    reuse_standardization = mode in ("test", "gapfill")
+    # A dry run never generates them -- it only needs the channel skeleton, so
+    # the flag channels are built with the cheap gapfill logic (constant/derived
+    # arrays) instead of the expensive synthetic-cloud path.
+    make_synthetic = mode in ("train", "test") and not dry_run
+    # test/gapfill reuse the recorded standardization instead of recomputing; a
+    # dry run computes no statistics at all.
+    reuse_standardization = mode in ("test", "gapfill") and not dry_run
     output_chunks = None
 
     if target_variable is None or missing_flag is None or land_flag is None:
@@ -1220,8 +1234,9 @@ def prepare_model_data(ds, options, mode):
                     applied_vars.append(name)
     else:
         # Feature statistics: each standardized feature uses its own stats,
-        # computed over the training dates.
-        if std_features:
+        # computed over the training dates. A dry run skips all statistic
+        # computation (the expensive part) and leaves the identity transform.
+        if std_features and not dry_run:
             feat_source = processed[std_features]
             if train_dates is not None:
                 feat_source = feat_source.sel(time=train_dates)
@@ -1239,7 +1254,7 @@ def prepare_model_data(ds, options, mode):
         # observed_target over the training dates, then shared by the whole
         # target group (full_target, observed_target, and the temporal lags) so
         # the standardized inputs and the training label share one scale.
-        if std_target:
+        if std_target and not dry_run:
             tgt_source = processed["observed_target"]
             if train_dates is not None:
                 tgt_source = tgt_source.sel(time=train_dates)
@@ -1289,6 +1304,11 @@ def prepare_model_data(ds, options, mode):
         # their true neighbours even when those neighbours are dropped here.
         # make_generator later splits this back into train/val via options.split.
         output = output.sel(time=fit_dates)
+
+    if dry_run:
+        # Pure query: return the lazy skeleton with the exact channel order and
+        # shape, without mutating ``options`` or computing anything.
+        return output
 
     if mode == "train":
         input_names = [name for name in output_vars if name != "full_target"]

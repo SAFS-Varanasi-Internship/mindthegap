@@ -19,9 +19,8 @@ def _full_options(ds, metadata, *, seed=1, **cloud_kwargs):
     ``prepare_model_data`` reads every setting from ``options``; cloud
     configuration is set on ``options.data`` (never a call argument).
     """
-    options = Options.default(data=ds, metadata=metadata, seed=seed)
+    options = Options.default(data=ds, metadata=metadata, smoke_test=True, seed=seed)
     options.verbose = False
-    options.resolve_gridder(ds)
     for key, value in cloud_kwargs.items():
         setattr(options.data, key, value)
     train_validation_dates(ds.time, options, seed=seed, verbose=False)

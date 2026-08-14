@@ -14,9 +14,8 @@ def _full_options(ds, metadata, *, resolve_split=True, seed=1, **cloud_kwargs):
     ``prepare_model_data`` reads every setting from ``options``; cloud
     configuration is set on ``options.data`` (never a call argument).
     """
-    options = Options.default(data=ds, metadata=metadata, seed=seed)
+    options = Options.default(data=ds, metadata=metadata, smoke_test=True, seed=seed)
     options.verbose = False
-    options.resolve_gridder(ds)
     for key, value in cloud_kwargs.items():
         setattr(options.data, key, value)
     if resolve_split:
@@ -244,6 +243,44 @@ def test_prepare_model_data_rejects_bad_mode():
     options = _full_options(ds, metadata)
     with pytest.raises(ValueError, match="mode must be"):
         prepare_model_data(ds, options, mode="bogus")
+
+
+def test_prepare_model_data_dry_run_matches_full_shape_and_is_pure():
+    # dry_run is a fast probe: it returns the lazy skeleton with the exact
+    # channel set/order and cropped shape a full train run produces, but does
+    # not compute statistics, generate synthetic clouds, resolve the split, or
+    # mutate options.
+    ds, metadata = make_demo_ds(days=30, lat_size=16, lon_size=16, seed=3)
+    options = _full_options(
+        ds, metadata, resolve_split=False, cloud_mode="synthetic", cloud_seed=1
+    )
+
+    skeleton = prepare_model_data(ds, options, mode="train", dry_run=True)
+
+    # Pure query: options untouched, split unresolved, no recorded stats.
+    assert options.data.input_names == []
+    assert not options.split.is_resolved()
+    assert not options.data.standardization
+
+    # A full run produces the same channel set and cropped spatial shape.
+    full = prepare_model_data(ds, options, mode="train")
+    assert list(skeleton.data_vars) == list(full.data_vars)
+    assert skeleton.sizes["lat"] == full.sizes["lat"]
+    assert skeleton.sizes["lon"] == full.sizes["lon"]
+
+
+def test_prepare_model_data_dry_run_returns_lazy_without_computing():
+    # The skeleton must stay lazy (dask-backed): probing shape/channels should
+    # never trigger the expensive standardization/cloud computation.
+    ds, metadata = make_demo_ds(days=20, lat_size=16, lon_size=16, seed=3)
+    ds = ds.chunk({"time": 5})
+    options = _full_options(ds, metadata, resolve_split=False)
+
+    skeleton = prepare_model_data(ds, options, mode="train", dry_run=True)
+
+    assert skeleton["observed_target"].chunks is not None
+    # No statistics were computed, so the standardization is the identity.
+    assert not options.data.standardization
 
 
 def test_prepare_model_data_std_target_false_leaves_target_raw():
