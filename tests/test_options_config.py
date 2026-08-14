@@ -10,55 +10,21 @@ from mindthegap import (
 from conftest import make_demo_ds
 
 
-def test_gridder_resolve_infers_tile_and_time_chunk():
-    ds, _ = make_demo_ds(days=60, lat_size=40, lon_size=40, seed=1)
-
-    gridder = GridderOptions().resolve_for(ds)
-
-    assert gridder.tile_size == (40, 40)
-    assert gridder.time_chunk == 10
-
-
-def test_gridder_resolve_caps_and_aligns_tile():
-    ds, _ = make_demo_ds(days=30, lat_size=100, lon_size=100, seed=1)
-
-    gridder = GridderOptions(tile_upper_limit=70, tile_multiple=8).resolve_for(ds)
+def test_gridder_defaults_are_used_as_is():
+    gridder = GridderOptions()
 
     assert gridder.tile_size == (64, 64)
-
-
-def test_gridder_resolve_large_cap_defaults_to_whole_grid():
-    ds, _ = make_demo_ds(days=30, lat_size=100, lon_size=100, seed=1)
-
-    gridder = GridderOptions(tile_upper_limit=10000).resolve_for(ds)
-
-    assert gridder.tile_size == (100, 100)
-
-
-def test_gridder_resolve_full_uses_whole_field():
-    ds, _ = make_demo_ds(days=30, lat_size=40, lon_size=88, seed=1)
-
-    gridder = GridderOptions(tile_size="full").resolve_for(ds)
-
-    assert gridder.tile_size == (40, 88)
+    assert gridder.time_chunk == 100
 
 
 def test_gridder_full_survives_serialization_round_trip():
-    ds, _ = make_demo_ds(days=30, lat_size=40, lon_size=88, seed=1)
     from mindthegap.options import _to_plain
 
     plain = _to_plain(GridderOptions(tile_size="full"))
     assert plain["tile_size"] == "full"
 
     restored = GridderOptions.from_dict(plain)
-    assert restored.resolve_for(ds).tile_size == (40, 88)
-
-
-def test_fit_resolve_scales_batch_size():
-    fit = FitOptions(epochs=50, patience=10).resolve_for((128, 128))
-    assert fit.batch_size == max(1, min(16, fit.pixel_budget // (128 * 128)))
-    assert fit.epochs == 50
-    assert fit.patience == 10
+    assert restored.tile_size == "full"
 
 
 def test_split_defaults():
@@ -181,14 +147,11 @@ def test_split_rejects_invalid_n_days(n_days):
         SplitOptions(n_days=n_days)
 
 
-def test_resolve_gridder_resolves_gridder_and_fit_not_split():
+def test_set_data_config_leaves_gridder_default_and_split_unresolved():
     ds, _ = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default()
 
-    result = options.resolve_gridder(ds)
-
-    assert result is options
-    assert options.gridder.tile_size == (16, 16)
+    assert options.gridder.tile_size == (64, 64)
     assert options.split.is_resolved() is False
 
 
@@ -205,21 +168,29 @@ def test_set_data_config_populates_data_from_metadata():
     assert options.data.missing_flag == "cloud_flag"
     assert options.data.land_flag == "land_flag"
     assert options.data.lat_bounds is not None
-    # set_data_config no longer resolves the gridder automatically.
+    # set_data_config never touches the gridder; it stays at its default.
     assert options.gridder.tile_size == (64, 64)
     assert options.split.is_resolved() is False
 
 
-def test_default_with_data_populates_data_but_not_gridder():
+def test_default_with_data_leaves_gridder_at_default():
     ds, metadata = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
 
     options = Options.default(data=ds, metadata=metadata)
 
     assert options.data.target_variable == "chlor_a"
-    # Gridder is resolved explicitly, not by Options.default(data=...).
+    # The gridder is used exactly as configured -- no dataset-derived tiling.
     assert options.gridder.tile_size == (64, 64)
-    options.resolve_gridder(ds)
+
+
+def test_default_smoke_test_uses_small_gridder():
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=42)
+
+    options = Options.default(data=ds, metadata=metadata, smoke_test=True)
+
     assert options.gridder.tile_size == (16, 16)
+    assert options.gridder.time_chunk == 10
+    assert options.fit.epochs == 2
 
 
 def test_data_options_log_target_defaults_false():
@@ -228,11 +199,10 @@ def test_data_options_log_target_defaults_false():
 
 def test_prepare_model_data_reads_config_from_options():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
-    options = Options.default(data=ds, metadata=metadata, seed=1)
+    options = Options.default(data=ds, metadata=metadata, smoke_test=True, seed=1)
     options.data.log_target = False
     options.data.n_temporal_lags = 2
     options.set_data_config(data=ds, metadata=metadata)
-    options.resolve_gridder(ds)
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import prepare_model_data
@@ -249,8 +219,7 @@ def test_prepare_model_data_reads_config_from_options():
 
 def test_prepare_model_data_defaults_output_chunks_from_gridder():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
-    options = Options.default(data=ds, metadata=metadata)
-    options.resolve_gridder(ds)
+    options = Options.default(data=ds, metadata=metadata, smoke_test=True)
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
     from mindthegap import prepare_model_data
@@ -265,7 +234,6 @@ def test_smoke_test_caps_epochs():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
 
     options = Options.default(data=ds, metadata=metadata, smoke_test=True)
-    options.resolve_gridder(ds)
 
     assert options.smoke_test is True
     assert options.fit.epochs == 2
@@ -282,8 +250,7 @@ def test_options_verbose_default_true_and_roundtrips():
 
 def test_prepare_model_data_accepts_full_options():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
-    options = Options.default(data=ds, metadata=metadata)
-    options.resolve_gridder(ds)
+    options = Options.default(data=ds, metadata=metadata, smoke_test=True)
     options.verbose = False
     train_validation_dates(ds.time, options, seed=1, verbose=False)
 
@@ -300,8 +267,7 @@ def test_prepare_model_data_resolves_split_when_unset():
     # mode="train" auto-chooses the split from options.split when the caller
     # has not already run train_validation_dates.
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
-    options = Options.default(data=ds, metadata=metadata, seed=3)
-    options.resolve_gridder(ds)
+    options = Options.default(data=ds, metadata=metadata, smoke_test=True, seed=3)
 
     from mindthegap import prepare_model_data
 
