@@ -46,6 +46,19 @@ def test_predicted_channels_with_geo_and_lags_and_features():
     assert predicted_channels(options) == 15
 
 
+def test_predicted_channels_ds_probe_matches_static_and_is_pure():
+    ds, metadata = make_demo_ds(days=20, lat_size=16, lon_size=16, seed=1)
+    ds = ds.assign(sst=ds["chlor_a"] * 0 + 1.0)
+    options = _prepared_options(
+        ds, metadata, add_geo=True, n_temporal_lags=2, features=["sst"]
+    )
+    # The ds-based path defers to prepare_model_data(dry_run=True) -- the source
+    # of truth -- and must agree with the static mirror without mutating options.
+    assert predicted_channels(options, ds) == predicted_channels(options) == 15
+    assert options.data.input_names == []
+    assert not options.split.is_resolved()
+    assert not options.data.standardization
+
 def test_predicted_field_shape_crops_to_multiple():
     ds, metadata = make_demo_ds(days=10, lat_size=100, lon_size=70, seed=1)
     lat, lon = predicted_field_shape(ds)

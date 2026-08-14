@@ -135,15 +135,26 @@ def _system_ram_gb():
             return 4.0
 
 
-def predicted_channels(options):
+def predicted_channels(options, ds=None):
     """Predict the number of model input channels ``prepare_model_data`` yields.
 
-    Mirrors the channel assembly in :func:`mindthegap.prepare_model_data`: the
-    seven base channels (observed target, two seasonal channels, three state
-    flags, land flag), two channels per temporal lag, any extra ``features``,
-    and three spherical geo channels when ``add_geo`` is set. ``full_target`` is
-    the training label, not an input channel.
+    When ``ds`` is given, this defers to :func:`mindthegap.prepare_model_data`
+    in ``dry_run`` mode -- the authoritative source of truth for the channel
+    set -- and counts the input channels of the lazy dataset it returns
+    (everything except the ``full_target`` label). This stays correct even if
+    the channel assembly changes.
+
+    Without ``ds`` it falls back to a static mirror of the channel assembly:
+    the seven base channels (observed target, two seasonal channels, three
+    state flags, land flag), two channels per temporal lag, any extra
+    ``features``, and three spherical geo channels when ``add_geo`` is set.
     """
+    if ds is not None:
+        from .data import prepare_model_data
+
+        skeleton = prepare_model_data(ds, options, mode="train", dry_run=True)
+        return sum(1 for name in skeleton.data_vars if name != "full_target")
+
     data = options.data
     n_lags = data.n_temporal_lags or 0
     n = 7
@@ -418,9 +429,21 @@ def set_up_gridder(
     recommendation. Returns a :class:`GridderRecommendation`.
     """
     multiple = unet_spatial_multiple()
-    field_shape = predicted_field_shape(ds, multiple=multiple)
-    n_channels = predicted_channels(options)
-    n_time = int(ds.sizes["time"]) if "time" in ds.sizes else 1
+    # Probe prepare_model_data (dry_run) once: it is the source of truth for the
+    # cropped field shape and channel set, so the tile-fitting math stays correct
+    # even if channel assembly or cropping changes. It is fast (no statistics,
+    # no synthetic clouds, no split) and does not mutate ``options``.
+    from .data import prepare_model_data
+
+    skeleton = prepare_model_data(ds, options, mode="train", dry_run=True)
+    n_channels = sum(
+        1 for name in skeleton.data_vars if name != "full_target"
+    )
+    field_shape = (
+        int(skeleton.sizes["lat"]),
+        int(skeleton.sizes["lon"]),
+    )
+    n_time = int(skeleton.sizes["time"]) if "time" in skeleton.sizes else 1
 
     has_gpu = _has_visible_gpu()
     if gpu_memory_gb is None:
