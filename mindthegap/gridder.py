@@ -165,20 +165,6 @@ def predicted_channels(options, ds=None):
     return n
 
 
-def predicted_field_shape(ds, lat="lat", lon="lon", multiple=None):
-    """Return the post-crop ``(lat, lon)`` size ``prepare_model_data`` will use.
-
-    ``prepare_model_data`` crops each spatial dimension down to a multiple of the
-    U-Net downsampling factor via :func:`mindthegap.crop_to_multiple`, so the
-    tile-fitting math must reason about the cropped field, not the raw one.
-    """
-    if multiple is None:
-        multiple = unet_spatial_multiple()
-    n_lat = int(ds.sizes[lat])
-    n_lon = int(ds.sizes[lon])
-    return n_lat - (n_lat % multiple), n_lon - (n_lon % multiple)
-
-
 def estimate_tile_bytes(tile_size, n_channels, batch_size, *, build_fn=None):
     """Estimate peak GPU bytes to train one batch at ``tile_size``.
 

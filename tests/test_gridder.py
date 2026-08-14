@@ -6,7 +6,6 @@ import mindthegap as mtg
 from mindthegap.gridder import (
     GridderRecommendation,
     predicted_channels,
-    predicted_field_shape,
     estimate_tile_bytes,
     _choose_tile,
     _choose_time_chunk,
@@ -59,14 +58,17 @@ def test_predicted_channels_ds_probe_matches_static_and_is_pure():
     assert not options.split.is_resolved()
     assert not options.data.standardization
 
-def test_predicted_field_shape_crops_to_multiple():
+def test_set_up_gridder_reports_cropped_field_shape():
+    # set_up_gridder derives the field shape from prepare_model_data's dry-run
+    # probe, which crops each axis to a multiple of the U-Net factor.
     ds, metadata = make_demo_ds(days=10, lat_size=100, lon_size=70, seed=1)
-    lat, lon = predicted_field_shape(ds)
+    options = _prepared_options(ds, metadata)
+    rec = set_up_gridder(ds, options, gpu_memory_gb=8.0, apply=False)
     multiple = unet_spatial_multiple()
+    lat, lon = rec.field_shape
     assert lat % multiple == 0
     assert lon % multiple == 0
-    assert lat == 96
-    assert lon == 64
+    assert (lat, lon) == (96, 64)
 
 
 def test_estimate_tile_bytes_scales_with_area_and_batch():
