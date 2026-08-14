@@ -17,6 +17,11 @@ A bundle is a directory containing:
     passed to :func:`mindthegap.prepare_model_data`. ``options`` records every
     setting *except* how the raw dataset was built, so this file preserves that
     last piece for reproducibility.
+``metrics.json`` (optional)
+    The run's ``metrics``, ``metadata``, and ``history`` when a
+    :class:`~mindthegap.TrainingResult` (from :func:`mindthegap.train_model`) is
+    saved. Written for experiment tracking; the model and options load without
+    it.
 """
 
 import json
@@ -28,6 +33,7 @@ MODEL_FILENAME = "model.keras"
 OPTIONS_FILENAME = "options.json"
 README_FILENAME = "README.md"
 DATASET_SCRIPT_FILENAME = "make_dataset.py"
+METRICS_FILENAME = "metrics.json"
 
 
 def _git_value(*args):
@@ -146,7 +152,7 @@ def _resolve_dataset_script(dataset_script):
 def save_model_bundle(
     model,
     path,
-    options,
+    options=None,
     *,
     model_name=None,
     limitations=None,
@@ -163,14 +169,20 @@ def save_model_bundle(
 
     Parameters
     ----------
-    model : keras.Model
-        The trained model to save.
+    model : keras.Model or mindthegap.TrainingResult
+        The trained model to save, or the :class:`~mindthegap.TrainingResult`
+        returned by :func:`mindthegap.train_model`. When a ``TrainingResult`` is
+        passed, its ``.model`` and ``.options`` are used (so ``options`` may be
+        omitted), and its ``.metrics``, ``.metadata``, and ``.history`` are
+        written to ``metrics.json`` in the bundle for experiment tracking.
     path : str or Path
         Bundle directory to create.
-    options : mindthegap.Options
+    options : mindthegap.Options, optional
         The resolved configuration (must have been run through
         :func:`mindthegap.prepare_model_data` in ``mode="train"`` so the data
-        section is fully populated).
+        section is fully populated). Required unless ``model`` is a
+        ``TrainingResult`` (which already carries it); if both are given, the
+        explicit ``options`` overrides the result's.
     model_name : str, optional
         Human-readable name for the model card. Defaults to a name derived from
         the dataset source.
@@ -183,6 +195,28 @@ def save_model_bundle(
         Overwrite an existing bundle.
     """
     from .validation import validate_options
+    from .training import TrainingResult
+
+    # Accept a TrainingResult directly: pull the fitted model, the resolved
+    # options (unless explicitly overridden), and the run's metrics/metadata/
+    # history so they can be persisted alongside the model.
+    run_metrics = None
+    if isinstance(model, TrainingResult):
+        result = model
+        model = result.model
+        if options is None:
+            options = result.options
+        run_metrics = {
+            "metrics": result.metrics,
+            "metadata": result.metadata,
+            "history": result.history,
+        }
+
+    if options is None:
+        raise ValueError(
+            "options is required: pass the resolved mindthegap.Options, or a "
+            "mindthegap.TrainingResult (from mtg.train_model) that carries it."
+        )
 
     # A saved bundle must carry the resolved channel order/standardization so it
     # can be reloaded and reused; validate_options explains how to produce them.
@@ -193,10 +227,13 @@ def save_model_bundle(
     options_path = bundle_path / OPTIONS_FILENAME
     readme_path = bundle_path / README_FILENAME
     script_path = bundle_path / DATASET_SCRIPT_FILENAME
+    metrics_path = bundle_path / METRICS_FILENAME
 
     tracked = [model_path, options_path, readme_path]
     if dataset_script is not None:
         tracked.append(script_path)
+    if run_metrics is not None:
+        tracked.append(metrics_path)
     existing = [file.name for file in tracked if file.exists()]
     if existing and not overwrite:
         raise FileExistsError(
@@ -209,6 +246,10 @@ def save_model_bundle(
 
     with options_path.open("w", encoding="utf-8") as file:
         json.dump(options.to_dict(), file, indent=2, sort_keys=False)
+
+    if run_metrics is not None:
+        with metrics_path.open("w", encoding="utf-8") as file:
+            json.dump(run_metrics, file, indent=2, sort_keys=False)
 
     resolved_name = model_name or (
         f"{options.data.source} U-Net gap filler"

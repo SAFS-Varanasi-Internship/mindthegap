@@ -157,3 +157,68 @@ def test_dataset_script_copied_from_file(tmp_path):
     assert (bundle_path / "make_dataset.py").read_text() == (
         "# builds the dataset\nds = load()\n"
     )
+
+
+def _training_result(model, options):
+    from mindthegap import TrainingResult
+
+    return TrainingResult(
+        model=model,
+        options=options,
+        metadata={"mindthegap_version": "9.9.9", "n_channels": 4},
+        metrics={"val_loss": 0.31, "val_mae": 0.22},
+        history={"loss": [1.0, 0.5], "val_loss": [1.1, 0.31]},
+    )
+
+
+def test_save_accepts_training_result(tmp_path):
+    bundle_path = tmp_path / "bundle"
+    options = _resolved_options()
+    result = _training_result(_model(), options)
+
+    returned = save_model_bundle(result, bundle_path)
+
+    assert returned == bundle_path
+    # The model + options are pulled from the result (options omitted).
+    names = {file.name for file in bundle_path.iterdir()}
+    assert names == {"model.keras", "options.json", "README.md", "metrics.json"}
+    loaded_model, loaded_options = load_model_bundle(bundle_path)
+    assert loaded_options == options
+    assert loaded_model is not None
+
+
+def test_training_result_metrics_json_persists_run(tmp_path):
+    bundle_path = tmp_path / "bundle"
+    options = _resolved_options()
+    result = _training_result(_model(), options)
+
+    save_model_bundle(result, bundle_path)
+
+    saved = json.loads((bundle_path / "metrics.json").read_text())
+    assert saved["metrics"] == {"val_loss": 0.31, "val_mae": 0.22}
+    assert saved["metadata"]["mindthegap_version"] == "9.9.9"
+    assert saved["history"]["val_loss"] == [1.1, 0.31]
+
+
+def test_explicit_options_overrides_result_options(tmp_path):
+    bundle_path = tmp_path / "bundle"
+    result_options = _resolved_options()
+    override_options = _resolved_options(product_id="override-id")
+    result = _training_result(_model(), result_options)
+
+    save_model_bundle(result, bundle_path, override_options)
+
+    saved = json.loads((bundle_path / "options.json").read_text())
+    assert saved["data"]["product_id"] == "override-id"
+
+
+def test_save_without_options_or_result_raises(tmp_path):
+    with pytest.raises(ValueError, match="options is required"):
+        save_model_bundle(_model(), tmp_path / "bundle")
+
+
+def test_plain_model_bundle_has_no_metrics_json(tmp_path):
+    bundle_path = tmp_path / "bundle"
+    save_model_bundle(_model(), bundle_path, _resolved_options())
+    assert not (bundle_path / "metrics.json").exists()
+
