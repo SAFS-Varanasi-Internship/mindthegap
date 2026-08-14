@@ -21,6 +21,7 @@ from .model import (
 )
 from .model_bundle import (
     load_model_bundle,
+    load_bundle_metrics,
     save_model_bundle,
 )
 from .gridder import (
@@ -64,6 +65,7 @@ __all__ = [
     "UNet",
     "save_model_bundle",
     "load_model_bundle",
+    "load_bundle_metrics",
     "set_up_gridder",
     "GridderRecommendation",
     "validate_options",

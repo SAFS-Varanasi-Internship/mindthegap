@@ -7,7 +7,9 @@ import pytest
 
 from mindthegap import (
     Options,
+    TrainingResult,
     load_model_bundle,
+    load_bundle_metrics,
     save_model_bundle,
 )
 
@@ -47,6 +49,17 @@ def _resolved_options(**overrides):
     return options
 
 
+def _result(model=None, options=None):
+    """Return a TrainingResult wrapping a model + resolved options."""
+    return TrainingResult(
+        model=model if model is not None else _model(),
+        options=options if options is not None else _resolved_options(),
+        metadata={"mindthegap_version": "9.9.9", "n_channels": 4},
+        metrics={"val_loss": 0.31, "val_mae": 0.22},
+        history={"loss": [1.0, 0.5], "val_loss": [1.1, 0.31]},
+    )
+
+
 def test_model_bundle_round_trip(tmp_path):
     model = _model()
     sample = np.arange(12, dtype=np.float32).reshape(3, 4)
@@ -54,16 +67,17 @@ def test_model_bundle_round_trip(tmp_path):
     bundle_path = tmp_path / "bundle"
     options = _resolved_options()
 
-    result = save_model_bundle(model, bundle_path, options)
+    saved_path = save_model_bundle(_result(model, options), bundle_path)
     loaded_model, loaded_options = load_model_bundle(bundle_path)
     actual = loaded_model.predict(sample, verbose=0)
 
-    assert result == bundle_path
+    assert saved_path == bundle_path
     assert loaded_model.jit_compile is False
     assert {file.name for file in bundle_path.iterdir()} == {
         "model.keras",
         "options.json",
         "README.md",
+        "metrics.json",
     }
     np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
     assert loaded_options == options
@@ -75,7 +89,7 @@ def test_options_json_is_the_full_resolved_options(tmp_path):
     bundle_path = tmp_path / "bundle"
     options = _resolved_options()
 
-    save_model_bundle(_model(), bundle_path, options)
+    save_model_bundle(_result(options=options), bundle_path)
 
     saved = json.loads((bundle_path / "options.json").read_text())
     assert saved["data"]["target"] == "full_target"
@@ -88,7 +102,7 @@ def test_readme_records_data_source(tmp_path):
     bundle_path = tmp_path / "bundle"
     options = _resolved_options(data_source="demo_data(dataset='pace')")
 
-    save_model_bundle(_model(), bundle_path, options)
+    save_model_bundle(_result(options=options), bundle_path)
 
     readme = (bundle_path / "README.md").read_text()
     assert "demo_data(dataset='pace')" in readme
@@ -97,7 +111,7 @@ def test_readme_records_data_source(tmp_path):
 def test_load_model_bundle_reports_data_source(tmp_path, capsys):
     bundle_path = tmp_path / "bundle"
     options = _resolved_options(data_source="demo_data(dataset='pace')")
-    save_model_bundle(_model(), bundle_path, options)
+    save_model_bundle(_result(options=options), bundle_path)
 
     capsys.readouterr()
     load_model_bundle(bundle_path)
@@ -106,20 +120,27 @@ def test_load_model_bundle_reports_data_source(tmp_path, capsys):
 
 
 def test_save_requires_resolved_options(tmp_path):
-    options = Options.default(seed=1)  # data section is unresolved
+    # A result whose options.data is unresolved is rejected.
+    result = _result(options=Options.default(seed=1))
     with pytest.raises(ValueError, match="prepare_model_data"):
-        save_model_bundle(_model(), tmp_path / "bundle", options)
+        save_model_bundle(result, tmp_path / "bundle")
+
+
+def test_save_rejects_non_training_result(tmp_path):
+    # A bare Keras model is no longer accepted; a TrainingResult is required.
+    with pytest.raises(TypeError, match="TrainingResult"):
+        save_model_bundle(_model(), tmp_path / "bundle")
 
 
 def test_bundle_overwrite_is_explicit(tmp_path):
     bundle_path = tmp_path / "bundle"
     options = _resolved_options()
-    save_model_bundle(_model(), bundle_path, options)
+    save_model_bundle(_result(options=options), bundle_path)
 
     with pytest.raises(FileExistsError):
-        save_model_bundle(_model(), bundle_path, options)
+        save_model_bundle(_result(options=options), bundle_path)
 
-    save_model_bundle(_model(), bundle_path, options, overwrite=True)
+    save_model_bundle(_result(options=options), bundle_path, overwrite=True)
 
 
 def test_load_rejects_incomplete_bundle(tmp_path):
@@ -131,12 +152,25 @@ def test_load_rejects_incomplete_bundle(tmp_path):
         load_model_bundle(bundle_path)
 
 
+def test_load_rejects_bundle_missing_metrics(tmp_path):
+    # metrics.json is a required bundle file.
+    bundle_path = tmp_path / "bundle"
+    bundle_path.mkdir()
+    for name in ("model.keras", "options.json", "README.md"):
+        (bundle_path / name).touch()
+
+    with pytest.raises(FileNotFoundError, match="metrics.json"):
+        load_model_bundle(bundle_path)
+
+
 def test_dataset_script_written_from_string(tmp_path):
     bundle_path = tmp_path / "bundle"
     options = _resolved_options()
     script = "import mindthegap as mtg\nds = mtg.demo_data('pace', options)\n"
 
-    save_model_bundle(_model(), bundle_path, options, dataset_script=script)
+    save_model_bundle(
+        _result(options=options), bundle_path, dataset_script=script
+    )
 
     written = (bundle_path / "make_dataset.py").read_text()
     assert written == script
@@ -151,7 +185,7 @@ def test_dataset_script_copied_from_file(tmp_path):
     script_file.write_text("# builds the dataset\nds = load()\n")
 
     save_model_bundle(
-        _model(), bundle_path, options, dataset_script=script_file
+        _result(options=options), bundle_path, dataset_script=script_file
     )
 
     assert (bundle_path / "make_dataset.py").read_text() == (
@@ -159,40 +193,10 @@ def test_dataset_script_copied_from_file(tmp_path):
     )
 
 
-def _training_result(model, options):
-    from mindthegap import TrainingResult
-
-    return TrainingResult(
-        model=model,
-        options=options,
-        metadata={"mindthegap_version": "9.9.9", "n_channels": 4},
-        metrics={"val_loss": 0.31, "val_mae": 0.22},
-        history={"loss": [1.0, 0.5], "val_loss": [1.1, 0.31]},
-    )
-
-
-def test_save_accepts_training_result(tmp_path):
+def test_metrics_json_persists_run(tmp_path):
     bundle_path = tmp_path / "bundle"
-    options = _resolved_options()
-    result = _training_result(_model(), options)
 
-    returned = save_model_bundle(result, bundle_path)
-
-    assert returned == bundle_path
-    # The model + options are pulled from the result (options omitted).
-    names = {file.name for file in bundle_path.iterdir()}
-    assert names == {"model.keras", "options.json", "README.md", "metrics.json"}
-    loaded_model, loaded_options = load_model_bundle(bundle_path)
-    assert loaded_options == options
-    assert loaded_model is not None
-
-
-def test_training_result_metrics_json_persists_run(tmp_path):
-    bundle_path = tmp_path / "bundle"
-    options = _resolved_options()
-    result = _training_result(_model(), options)
-
-    save_model_bundle(result, bundle_path)
+    save_model_bundle(_result(), bundle_path)
 
     saved = json.loads((bundle_path / "metrics.json").read_text())
     assert saved["metrics"] == {"val_loss": 0.31, "val_mae": 0.22}
@@ -200,25 +204,18 @@ def test_training_result_metrics_json_persists_run(tmp_path):
     assert saved["history"]["val_loss"] == [1.1, 0.31]
 
 
-def test_explicit_options_overrides_result_options(tmp_path):
+def test_load_bundle_metrics_returns_run(tmp_path):
     bundle_path = tmp_path / "bundle"
-    result_options = _resolved_options()
-    override_options = _resolved_options(product_id="override-id")
-    result = _training_result(_model(), result_options)
+    save_model_bundle(_result(), bundle_path)
 
-    save_model_bundle(result, bundle_path, override_options)
-
-    saved = json.loads((bundle_path / "options.json").read_text())
-    assert saved["data"]["product_id"] == "override-id"
+    run = load_bundle_metrics(bundle_path)
+    assert run["metrics"] == {"val_loss": 0.31, "val_mae": 0.22}
+    assert run["metadata"]["n_channels"] == 4
+    assert run["history"]["loss"] == [1.0, 0.5]
 
 
-def test_save_without_options_or_result_raises(tmp_path):
-    with pytest.raises(ValueError, match="options is required"):
-        save_model_bundle(_model(), tmp_path / "bundle")
-
-
-def test_plain_model_bundle_has_no_metrics_json(tmp_path):
+def test_load_bundle_metrics_missing_file(tmp_path):
     bundle_path = tmp_path / "bundle"
-    save_model_bundle(_model(), bundle_path, _resolved_options())
-    assert not (bundle_path / "metrics.json").exists()
-
+    bundle_path.mkdir()
+    with pytest.raises(FileNotFoundError, match="metrics.json"):
+        load_bundle_metrics(bundle_path)
