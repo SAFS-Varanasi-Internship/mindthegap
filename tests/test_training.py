@@ -69,10 +69,28 @@ def test_train_model_metadata_records_provenance(trained):
     assert "epochs" not in md
 
 
-def test_train_model_keeps_lazy_ds_std(trained):
-    _, _, result = trained
+def test_train_model_keeps_lazy_ds_std():
+    # With load_data=False the standardized dataset stays lazy (dask-backed).
+    ds, metadata = make_demo_ds(days=30, lat_size=16, lon_size=16, seed=3)
+    options = _configured_options(ds, metadata)
+    result = mtg.train_model(ds, options, load_data=False)
     assert result.ds_std is not None
     assert result.ds_std["observed_target"].chunks is not None
+
+
+def test_train_model_load_data_materializes_ds_std():
+    # load_data=True eagerly loads the standardized dataset into memory.
+    ds, metadata = make_demo_ds(days=30, lat_size=16, lon_size=16, seed=3)
+    options = _configured_options(ds, metadata)
+    result = mtg.train_model(ds, options, load_data=True)
+    assert result.ds_std["observed_target"].chunks is None
+
+
+def test_train_model_rejects_bad_load_data():
+    ds, metadata = make_demo_ds(days=20, lat_size=16, lon_size=16, seed=3)
+    options = _configured_options(ds, metadata)
+    with pytest.raises(ValueError, match="load_data"):
+        mtg.train_model(ds, options, load_data="sometimes")
 
 
 def test_train_model_requires_configured_data():

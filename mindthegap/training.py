@@ -112,7 +112,70 @@ def _detect_device():
         return "unknown"
 
 
-def train_model(ds, options, *, callbacks=None, verbose=None):
+def _dataset_nbytes(ds):
+    """Best-effort in-memory size (bytes) of ``ds`` if fully loaded."""
+    try:
+        return int(ds.nbytes)
+    except Exception:
+        return None
+
+
+def _available_ram_bytes():
+    """Best-effort *available* (not total) host RAM in bytes, else ``None``."""
+    try:
+        import psutil
+
+        return int(psutil.virtual_memory().available)
+    except Exception:
+        return None
+
+
+# Loading materializes the whole standardized field plus transient copies made
+# while tf.data batches it, so require comfortable headroom before auto-loading.
+_LOAD_RAM_HEADROOM = 2.0
+
+
+def _should_load_data(ds_std, load_data, verbose):
+    """Decide whether to eagerly ``load()`` ``ds_std`` into memory.
+
+    ``load_data`` is ``True`` (force), ``False`` (never), or ``"auto"`` (load
+    only when the standardized dataset comfortably fits in available RAM).
+    Returns ``True``/``False`` and prints the reason when ``verbose``.
+    """
+    if load_data is True:
+        return True
+    if load_data is False:
+        return False
+    if load_data != "auto":
+        raise ValueError(
+            f"load_data must be True, False, or 'auto'; got {load_data!r}"
+        )
+
+    size = _dataset_nbytes(ds_std)
+    avail = _available_ram_bytes()
+    if size is None or avail is None:
+        if verbose:
+            print(
+                "load_data='auto': cannot estimate dataset size or available "
+                "RAM; streaming from dask (pass load_data=True to force)."
+            )
+        return False
+
+    fits = size * _LOAD_RAM_HEADROOM <= avail
+    if verbose:
+        need_gb = size * _LOAD_RAM_HEADROOM / 1e9
+        print(
+            f"load_data='auto': standardized data ~{size / 1e9:.1f} GB, "
+            f"available RAM ~{avail / 1e9:.1f} GB "
+            f"(need ~{need_gb:.1f} GB with headroom): "
+            + ("loading into memory." if fits else "streaming from dask.")
+        )
+    return fits
+
+
+def train_model(
+    ds, options, *, load_data="auto", callbacks=None, verbose=None
+):
     """Train a gap-filling model end to end and return a :class:`TrainingResult`.
 
     This is the high-level fit entry point. Given a loaded dataset ``ds`` and a
@@ -142,6 +205,14 @@ def train_model(ds, options, *, callbacks=None, verbose=None):
         :meth:`~mindthegap.Options.set_up_data_options` first). The gridder,
         split, and fit sections are used as configured (the split is resolved
         automatically if not already set).
+    load_data : {"auto", True, False}, optional
+        Whether to eagerly load the standardized dataset into host memory
+        before streaming it into ``tf.data``. When the whole field fits in RAM
+        this replays the standardization/channel pipeline once instead of on
+        every tile every epoch, which is dramatically faster (dask replay per
+        batch is the usual cause of slow steps). ``"auto"`` (default) loads only
+        when the dataset comfortably fits in available RAM; ``True`` forces a
+        load; ``False`` always streams lazily from dask.
     callbacks : list, optional
         Keras callbacks passed through to :func:`~mindthegap.fit_model`. When
         ``None`` the default EarlyStopping (on ``val_loss``) is used.
@@ -156,6 +227,10 @@ def train_model(ds, options, *, callbacks=None, verbose=None):
     """
     # Fail early with a clear, how-to-fix message if the data config is missing.
     validate_options(options, requires=["data"])
+    if load_data not in (True, False, "auto"):
+        raise ValueError(
+            f"load_data must be True, False, or 'auto'; got {load_data!r}"
+        )
 
     if verbose is None:
         verbose = options.verbose
@@ -163,6 +238,13 @@ def train_model(ds, options, *, callbacks=None, verbose=None):
     # 1. Standardized, lazy dataset. This also resolves the split (if needed),
     #    channel order, and standardization statistics onto options.data.
     ds_std = prepare_model_data(ds, options, mode="train")
+
+    # 1b. Optionally materialize the standardized field once. Streaming replays
+    #     the whole crop/channel/standardization graph per tile per epoch, so
+    #     when the data fits in RAM a single load() makes each step a cheap
+    #     in-memory slice instead.
+    if _should_load_data(ds_std, load_data, verbose):
+        ds_std = ds_std.load()
 
     # 2. Streaming train/validation pipelines (validates split + gridder).
     train_dataset, val_dataset, train_steps, val_steps = make_generator(
