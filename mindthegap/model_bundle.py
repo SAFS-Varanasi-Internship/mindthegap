@@ -12,6 +12,10 @@ A bundle is a directory containing:
 ``README.md``
     A human-readable model card generated from ``options`` and the repository
     source (git) information.
+``metrics.json``
+    The run's ``metrics``, ``metadata``, and training ``history`` recorded from
+    the :class:`~mindthegap.TrainingResult`. Read it back with
+    :func:`load_bundle_metrics` for experiment tracking.
 ``make_dataset.py`` (optional)
     A verbatim record of the script/code the user ran to create the ``ds``
     passed to :func:`mindthegap.prepare_model_data`. ``options`` records every
@@ -28,6 +32,7 @@ MODEL_FILENAME = "model.keras"
 OPTIONS_FILENAME = "options.json"
 README_FILENAME = "README.md"
 DATASET_SCRIPT_FILENAME = "make_dataset.py"
+METRICS_FILENAME = "metrics.json"
 
 
 def _git_value(*args):
@@ -144,33 +149,32 @@ def _resolve_dataset_script(dataset_script):
 
 
 def save_model_bundle(
-    model,
+    result,
     path,
-    options,
     *,
     model_name=None,
     limitations=None,
     dataset_script=None,
     overwrite=False,
 ):
-    """Save a Keras model bundle with its resolved options as the source of truth.
+    """Save a training run as a portable model bundle.
 
     Writes ``model.keras``, ``options.json`` (the full resolved
-    :class:`~mindthegap.Options`), and a generated ``README.md`` model card into
-    ``path``. When ``dataset_script`` is provided it is written to
+    :class:`~mindthegap.Options`), ``metrics.json`` (the run's metrics,
+    metadata, and training history), and a generated ``README.md`` model card
+    into ``path``. When ``dataset_script`` is provided it is written to
     ``make_dataset.py`` as a verbatim record of how the training dataset was
     created (``options`` records everything else).
 
     Parameters
     ----------
-    model : keras.Model
-        The trained model to save.
+    result : mindthegap.TrainingResult
+        The result returned by :func:`mindthegap.train_model`. Its ``.model``,
+        resolved ``.options``, and ``.metrics`` / ``.metadata`` / ``.history``
+        are all saved. A bundle is always produced from a completed run, so a
+        bare model is not accepted -- run :func:`mindthegap.train_model` first.
     path : str or Path
         Bundle directory to create.
-    options : mindthegap.Options
-        The resolved configuration (must have been run through
-        :func:`mindthegap.prepare_model_data` in ``mode="train"`` so the data
-        section is fully populated).
     model_name : str, optional
         Human-readable name for the model card. Defaults to a name derived from
         the dataset source.
@@ -183,6 +187,23 @@ def save_model_bundle(
         Overwrite an existing bundle.
     """
     from .validation import validate_options
+    from .training import TrainingResult
+
+    if not isinstance(result, TrainingResult):
+        raise TypeError(
+            "save_model_bundle expects a mindthegap.TrainingResult from "
+            "mtg.train_model, got "
+            f"{type(result).__name__}. Run result = mtg.train_model(ds, "
+            "options) and pass result."
+        )
+
+    model = result.model
+    options = result.options
+    run_metrics = {
+        "metrics": result.metrics,
+        "metadata": result.metadata,
+        "history": result.history,
+    }
 
     # A saved bundle must carry the resolved channel order/standardization so it
     # can be reloaded and reused; validate_options explains how to produce them.
@@ -193,8 +214,9 @@ def save_model_bundle(
     options_path = bundle_path / OPTIONS_FILENAME
     readme_path = bundle_path / README_FILENAME
     script_path = bundle_path / DATASET_SCRIPT_FILENAME
+    metrics_path = bundle_path / METRICS_FILENAME
 
-    tracked = [model_path, options_path, readme_path]
+    tracked = [model_path, options_path, readme_path, metrics_path]
     if dataset_script is not None:
         tracked.append(script_path)
     existing = [file.name for file in tracked if file.exists()]
@@ -209,6 +231,9 @@ def save_model_bundle(
 
     with options_path.open("w", encoding="utf-8") as file:
         json.dump(options.to_dict(), file, indent=2, sort_keys=False)
+
+    with metrics_path.open("w", encoding="utf-8") as file:
+        json.dump(run_metrics, file, indent=2, sort_keys=False)
 
     resolved_name = model_name or (
         f"{options.data.source} U-Net gap filler"
@@ -243,7 +268,8 @@ def load_model_bundle(path, compile=False):
     ``options`` is reconstructed from ``options.json`` and is the full resolved
     :class:`~mindthegap.Options` used to train the model. Replay it through
     :func:`mindthegap.prepare_model_data` in ``mode="gapfill"`` to reproduce the
-    model inputs exactly.
+    model inputs exactly. Use :func:`load_bundle_metrics` to read the run's
+    metrics/metadata/history from the same bundle.
     """
     from .options import Options
 
@@ -252,6 +278,7 @@ def load_model_bundle(path, compile=False):
         bundle_path / MODEL_FILENAME,
         bundle_path / OPTIONS_FILENAME,
         bundle_path / README_FILENAME,
+        bundle_path / METRICS_FILENAME,
     )
     missing = [file.name for file in required if not file.is_file()]
     if missing:
@@ -276,3 +303,26 @@ def load_model_bundle(path, compile=False):
 
     print(f"Data loaded for this model with: {options.data.data_source}")
     return model, options
+
+
+def load_bundle_metrics(path):
+    """Return the run's ``{"metrics", "metadata", "history"}`` from a bundle.
+
+    Reads ``metrics.json`` -- the metrics, resolved run metadata, and full
+    training history recorded by :func:`save_model_bundle` from the
+    :class:`~mindthegap.TrainingResult`. This is the tracker-friendly companion
+    to :func:`load_model_bundle`; feed the pieces to an experiment tracker, for
+    example::
+
+        run = mtg.load_bundle_metrics(path)
+        mlflow.log_metrics(run["metrics"])
+    """
+    metrics_path = Path(path) / METRICS_FILENAME
+    if not metrics_path.is_file():
+        raise FileNotFoundError(
+            f"No {METRICS_FILENAME} in bundle at {path}; it is written by "
+            "mtg.save_model_bundle from a mtg.train_model result."
+        )
+    with metrics_path.open(encoding="utf-8") as file:
+        return json.load(file)
+

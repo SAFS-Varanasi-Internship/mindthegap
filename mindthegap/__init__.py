@@ -21,6 +21,7 @@ from .model import (
 )
 from .model_bundle import (
     load_model_bundle,
+    load_bundle_metrics,
     save_model_bundle,
 )
 from .gridder import (
@@ -30,6 +31,10 @@ from .gridder import (
 from .validation import (
     validate_options,
     OptionsValidationError,
+)
+from .training import (
+    train_model,
+    TrainingResult,
 )
 from .options import (
     Options,
@@ -60,10 +65,13 @@ __all__ = [
     "UNet",
     "save_model_bundle",
     "load_model_bundle",
+    "load_bundle_metrics",
     "set_up_gridder",
     "GridderRecommendation",
     "validate_options",
     "OptionsValidationError",
+    "train_model",
+    "TrainingResult",
     "Options",
     "DataOptions",
     "GridderOptions",

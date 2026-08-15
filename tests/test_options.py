@@ -43,6 +43,24 @@ def test_to_dict_is_json_safe():
     assert json.loads(payload)["fit"]["batch_size"] == 16
 
 
+def test_to_flat_dict_produces_dotted_tracker_keys():
+    options = Options.default(seed=42)
+    options.gridder = GridderOptions(tile_size=(128, 128))
+    options.fit = FitOptions(epochs=50, batch_size=32)
+
+    flat = options.to_flat_dict()
+
+    # Nested sections become dotted keys; list values are kept whole.
+    assert flat["gridder.method"] == "xbatcher"
+    assert flat["gridder.tile_size"] == [128, 128]
+    assert flat["fit.epochs"] == 50
+    assert flat["fit.batch_size"] == 32
+    assert flat["seed"] == 42
+    # Every key is a flat string with no nested dicts as values.
+    assert all(isinstance(key, str) for key in flat)
+    assert not any(isinstance(value, dict) for value in flat.values())
+
+
 def test_gridder_derives_patch_and_overlap_dims():
     gridder = GridderOptions(tile_size=32, overlap=4, time_chunk=10)
 

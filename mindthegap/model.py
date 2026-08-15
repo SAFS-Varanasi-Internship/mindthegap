@@ -366,6 +366,7 @@ def fit_model(
             learning_rate=options.learning_rate
         ),
         loss=options.loss,
+        metrics=["mae"],
         jit_compile=False,
     )
 
