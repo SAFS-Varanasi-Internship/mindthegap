@@ -44,6 +44,13 @@ def _resolved_options(**overrides):
     data.target_std = 1.5
     data.transforms = {"target": "natural logarithm", "temporal_lags": 1}
     data.missing_value_handling = "Replace NaN inputs with zero."
+    # A saved bundle is the product of a completed training run, so its options
+    # must also carry a resolved split (and a valid gridder, which is the
+    # default). Populate a minimal manual split so the fixture is a fully valid
+    # training configuration.
+    options.split.method = "manual"
+    options.split.train_dates = ["2010-01-01", "2010-01-02", "2010-01-03"]
+    options.split.val_dates = ["2010-01-04"]
     for key, value in overrides.items():
         setattr(data, key, value)
     return options
@@ -124,6 +131,24 @@ def test_save_requires_resolved_options(tmp_path):
     result = _result(options=Options.default(seed=1))
     with pytest.raises(ValueError, match="prepare_model_data"):
         save_model_bundle(result, tmp_path / "bundle")
+
+
+def test_save_requires_resolved_split(tmp_path):
+    # A fully resolved data section is not enough: the split must also be set,
+    # because a saved bundle is the product of a completed training run.
+    options = _resolved_options()
+    options.split.train_dates = []
+    options.split.val_dates = []
+    with pytest.raises(ValueError, match="options.split"):
+        save_model_bundle(_result(options=options), tmp_path / "bundle")
+
+
+def test_save_requires_valid_gridder(tmp_path):
+    # An unsupported gridder method is rejected on save.
+    options = _resolved_options()
+    options.gridder.method = "grid"  # bypass construction validation
+    with pytest.raises(ValueError, match="xbatcher"):
+        save_model_bundle(_result(options=options), tmp_path / "bundle")
 
 
 def test_save_rejects_non_training_result(tmp_path):
