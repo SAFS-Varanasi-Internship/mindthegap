@@ -1,6 +1,6 @@
 """Recommend a memory-aware gridder (tile size, time chunk, batch size).
 
-This module provides :func:`set_up_gridder`, an *optional* helper that
+This module provides :func:`set_up_gridder_options`, an *optional* helper that
 recommends how the prepared dataset should be tiled for training. It sizes the
 spatial tile so a training batch fits in GPU memory (using the *actual*
 :func:`mindthegap.UNet` architecture to estimate activation memory), sizes the
@@ -21,6 +21,20 @@ import shutil
 import subprocess
 
 from .model import UNet, unet_spatial_multiple
+
+
+# The tunable knobs accepted in the ``gridder_options`` dict of
+# :func:`set_up_gridder_options`. Grouping them (mirroring ``cloud_options`` /
+# ``split_options``) lets the helper reject unknown keys instead of exposing one
+# keyword per parameter.
+GRIDDER_OPTIONS = (
+    "gpu_memory_gb",
+    "gpu_usable",
+    "ram_usable",
+    "batch_floor",
+    "min_tile",
+    "overlap",
+)
 
 
 # Bytes per element for the standardized float32 dataset the pipeline produces.
@@ -60,8 +74,8 @@ class GridderRecommendation:
         ntl, ntn = self.n_tiles
         whole = ntl == 1 and ntn == 1
         lines = [
-            "set_up_gridder recommendation",
-            "-----------------------------",
+            "set_up_gridder_options recommendation",
+            "-------------------------------------",
             f"  device            : {self.device}",
             f"  usable GPU memory : {self.gpu_memory_gb:.1f} GB",
             f"  usable host RAM   : {self.ram_gb:.1f} GB",
@@ -340,11 +354,18 @@ def _choose_tile(
     return best
 
 
-def _choose_time_chunk(field_shape, n_channels, usable_ram_bytes, n_time):
+def _choose_time_chunk(
+    field_shape, n_channels, usable_ram_bytes, n_time, target_frames=None
+):
     """Largest time chunk whose dask block fits comfortably in host RAM.
 
     A block spans ``time_chunk`` frames over the whole cropped field for every
     channel. The chunk is capped at the number of available time steps.
+
+    When ``target_frames`` is given (e.g. ``options.split.n_days``), the chunk
+    aims for that many frames rather than the largest RAM-fitting block, but is
+    still capped by both the RAM budget and the available time steps so a block
+    never exceeds ``usable_ram_bytes``.
     """
     field_lat, field_lon = field_shape
     bytes_per_frame = (
@@ -355,22 +376,22 @@ def _choose_time_chunk(field_shape, n_channels, usable_ram_bytes, n_time):
         * _RAM_WORKING_MULTIPLIER
     )
     if bytes_per_frame <= 0:
-        return int(n_time)
+        desired = int(target_frames) if target_frames else int(n_time)
+        return max(1, min(desired, int(n_time)))
     max_frames = int(usable_ram_bytes // bytes_per_frame)
     max_frames = max(1, min(max_frames, int(n_time)))
+    if target_frames is not None:
+        # Use the requested number of days for the chunk, but never exceed what
+        # fits in RAM or the number of available frames.
+        return max(1, min(int(target_frames), max_frames))
     return max_frames
 
 
-def set_up_gridder(
+def set_up_gridder_options(
     ds,
     options,
     *,
-    gpu_memory_gb=None,
-    gpu_usable=0.7,
-    ram_usable=0.5,
-    batch_floor=8,
-    min_tile=64,
-    overlap=16,
+    gridder_options=None,
     apply=None,
     build_fn=None,
 ):
@@ -379,9 +400,31 @@ def set_up_gridder(
     This *optional* helper sizes the training tile so one batch of the actual
     :func:`mindthegap.UNet` fits in GPU memory, sizes the dask time chunk so a
     block fits comfortably in host RAM, and suggests a batch size and tile
-    overlap. Call it *after* :meth:`mindthegap.Options.set_up_data_options` so
-    the model channel count is known; ``options.data`` must define the target,
-    flags, and feature/lag/geo choices.
+    overlap. Like :meth:`mindthegap.Options.set_up_data_options` and
+    :func:`mindthegap.set_up_train_split_options`, the tunable knobs are grouped
+    into a single ``gridder_options`` dict rather than one keyword per parameter.
+
+    Call it *after* :meth:`mindthegap.Options.set_up_data_options` (so the model
+    channel count is known) and generally *after*
+    :func:`mindthegap.set_up_train_split_options`, because the recommended time
+    chunk depends on how much of the record training uses: when
+    ``options.split.n_days`` is set, the time chunk targets that many days (still
+    capped so a block fits in RAM) instead of the largest RAM-fitting block.
+    ``options.data`` must define the target, flags, and feature/lag/geo choices.
+
+    ``gridder_options`` accepts:
+
+    - ``gpu_memory_gb`` -- override the queried GPU memory (falls back to host
+      RAM when no GPU is visible).
+    - ``gpu_usable`` / ``ram_usable`` -- usable fractions of GPU / RAM
+      (defaults 0.7 / 0.5).
+    - ``batch_floor`` -- minimum batch used when fitting a tile (default 8;
+      ``mtg.UNet`` uses batch normalization so a too-small batch is unstable).
+    - ``min_tile`` -- minimum tile edge in pixels (default 64).
+    - ``overlap`` -- tile overlap in pixels when the field is tiled (default 16).
+
+    Passing a key outside this set raises a ``ValueError`` naming the valid
+    keys. See :data:`mindthegap.gridder.GRIDDER_OPTIONS`.
 
     Sizing logic:
 
@@ -396,13 +439,10 @@ def set_up_gridder(
       at least ``min_tile`` (default 64) on each axis, because smaller tiles
       produce severe reconstruction artifacts with realistic cloud gaps.
     - The time chunk is the largest number of frames whose full-field block fits
-      ``ram_usable`` of host RAM.
-    - ``overlap`` (fixed, default 16 px) is suggested only when the field is
-      tiled; a single whole-field tile needs no overlap.
-
-    ``gpu_memory_gb`` overrides the queried GPU memory (falls back to host RAM
-    when no GPU is visible). ``gpu_usable`` / ``ram_usable`` are the usable
-    fractions of GPU / RAM.
+      ``ram_usable`` of host RAM, or ``options.split.n_days`` frames (capped by
+      that RAM budget) when a split day count is set.
+    - ``overlap`` (default 16 px) is suggested only when the field is tiled; a
+      single whole-field tile needs no overlap.
 
     When even a ``min_tile`` x ``min_tile`` tile cannot fit a ``batch_floor``
     batch, a :class:`RuntimeError` is raised explaining that the user must lower
@@ -414,6 +454,20 @@ def set_up_gridder(
     interactively, ``True`` applies without prompting, ``False`` only returns the
     recommendation. Returns a :class:`GridderRecommendation`.
     """
+    provided = dict(gridder_options or {})
+    unknown = [key for key in provided if key not in GRIDDER_OPTIONS]
+    if unknown:
+        raise ValueError(
+            f"gridder_options {sorted(unknown)} are not recognized; valid keys "
+            f"are {list(GRIDDER_OPTIONS)}."
+        )
+    gpu_memory_gb = provided.get("gpu_memory_gb", None)
+    gpu_usable = provided.get("gpu_usable", 0.7)
+    ram_usable = provided.get("ram_usable", 0.5)
+    batch_floor = provided.get("batch_floor", 8)
+    min_tile = provided.get("min_tile", 64)
+    overlap = provided.get("overlap", 16)
+
     multiple = unet_spatial_multiple()
     # Probe prepare_model_data (dry_run) once: it is the source of truth for the
     # cropped field shape and channel set, so the tile-fitting math stays correct
@@ -471,8 +525,15 @@ def set_up_gridder(
     whole_field = n_tiles == (1, 1)
     tile_overlap = None if whole_field else (overlap, overlap)
 
+    # When the split limits training to a fixed number of days, target that many
+    # frames for the chunk (still capped by the RAM budget) so a chunk can span
+    # the whole training record; otherwise use the largest RAM-fitting block.
     time_chunk = _choose_time_chunk(
-        field_shape, n_channels, usable_ram_bytes, n_time
+        field_shape,
+        n_channels,
+        usable_ram_bytes,
+        n_time,
+        target_frames=options.split.n_days,
     )
 
     recommendation = GridderRecommendation(

@@ -845,7 +845,7 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
     standardization statistics are **not** computed, synthetic clouds are **not**
     generated, the train/validation split is **not** resolved, and ``options``
     is **not** mutated. Use it to inspect ``ds_std.sizes`` / ``ds_std.data_vars``
-    (for example from :func:`mindthegap.set_up_gridder`) without paying for a
+    (for example from :func:`mindthegap.set_up_gridder_options`) without paying for a
     full preparation. ``mode`` still selects which flag channels are built.
     """
     from .options import Options as _Options

@@ -133,8 +133,8 @@ def _check_gridder(options):
             f"options.gridder.method={options.gridder.method!r} is not "
             "supported; only 'xbatcher' is currently available. Set "
             "options.gridder = mtg.GridderOptions(method='xbatcher', "
-            "tile_size=(64, 64)) (or run mtg.set_up_gridder(ds, options) for a "
-            "memory-aware recommendation)."
+            "tile_size=(64, 64)) (or run mtg.set_up_gridder_options(ds, "
+            "options) for a memory-aware recommendation)."
         ]
     return []
 

@@ -26,7 +26,7 @@ from .model_bundle import (
     save_model_bundle,
 )
 from .gridder import (
-    set_up_gridder,
+    set_up_gridder_options,
     GridderRecommendation,
 )
 from .validation import (
@@ -71,7 +71,7 @@ __all__ = [
     "save_model_bundle",
     "load_model_bundle",
     "load_bundle_metrics",
-    "set_up_gridder",
+    "set_up_gridder_options",
     "GridderRecommendation",
     "validate_options",
     "OptionsValidationError",

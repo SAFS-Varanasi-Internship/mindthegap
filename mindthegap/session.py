@@ -115,8 +115,9 @@ def set_up(*, smoke_test=False, seed=None, verbose=True, quiet_native=True):
     2. enables GPU memory growth (so TensorFlow grows its allocation instead of
        grabbing all device memory) and prints the detected device, and
     3. returns ``mtg.Options.default(smoke_test=..., seed=...)`` -- the object
-       the rest of the pipeline (``set_up_data_options``, ``set_up_gridder``,
-       ``train_model``, ``save_model_bundle``) configures and consumes.
+       the rest of the pipeline (``set_up_data_options``,
+       ``set_up_gridder_options``, ``train_model``, ``save_model_bundle``)
+       configures and consumes.
 
     Parameters
     ----------
