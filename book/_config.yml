@@ -2,7 +2,7 @@
 # Learn more at https://jupyterbook.org/customize/config.html
 
 title: UNet gap-filling
-author: Yifei Hang, Eli Holmes, Troy Russo, Kaira Nair
+author: Eli Holmes, Troy Russo, Kaira Nair, Yifei Hang, 
 logo: logo.jpg
 
 # Force re-execution of notebooks on each build.
