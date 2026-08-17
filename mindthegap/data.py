@@ -682,8 +682,8 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
 
     In ``mode="train"``, if ``options.split`` has not been resolved yet, the
     train/validation dates are chosen automatically via
-    :func:`mindthegap.set_up_train_split` (a random split over all days in
-    ``ds``, using the method/fractions/seed on ``options.split``); callers may
+    :func:`mindthegap.set_up_train_split_options` (a random split over all days
+    in ``ds``, using the method/fractions/seed on ``options.split``); callers may
     still resolve the split explicitly beforehand for full control. A split that
     is partially set but invalid is reported by the options validator rather
     than silently overwritten.
@@ -882,7 +882,7 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
             # Choose the train/validation dates over all days in ds using the
             # method/fractions/seed on options.split when the caller has not
             # already done so.
-            set_up_train_split(ds, full)
+            set_up_train_split_options(ds, full)
         split_selection = full.split.train_selection()
         available = pd.DatetimeIndex(
             pd.to_datetime(np.asarray(ds["time"].values))
@@ -1586,34 +1586,57 @@ def train_validation_dates(
     return full_options
 
 
-def set_up_train_split(ds, options, *, verbose=None, **overrides):
+def set_up_train_split_options(
+    ds, options, *, split_mode=None, split_options=None, verbose=None
+):
     """Resolve ``options.split`` for training and return ``options``.
 
-    This is the *optional* split set-up helper (a companion to
-    ``mtg.set_up_data_options`` and ``mtg.set_up_gridder``). It fills in
-    ``options.split`` -- the train/validation dates and the settings that
-    produced them -- using the default ``method="random"`` split over *all*
-    days in ``ds`` (``n_days`` is set to the number of dates in ``ds.time``)
-    with the ``train_fraction`` / ``val_fraction`` / ``seed`` from
-    ``options.split``.
+    This is the *optional* split set-up helper, mirroring
+    :meth:`mindthegap.Options.set_up_data_options`. The split configuration is
+    grouped rather than exposed as one keyword per parameter: ``split_mode``
+    selects the strategy and is *not* required (default
+    ``options.split.method`` -- ``"random"``); ``split_options`` is an optional
+    dict of only the parameters that apply to the chosen mode.
 
-    It delegates to :func:`train_validation_dates`, so any of its parameters
-    (``method``, ``n_days``, ``train_fraction``, ``val_fraction``, ``n_train``,
-    ``n_val``, ``train_slice``, ``val_slice``, ``min_day_difference``, ``seed``)
-    may be passed as keyword ``overrides`` to depart from the "all days, random"
-    default -- for example ``method="manual", train_slice=..., val_slice=...``.
+    - ``split_mode="random"`` (default): a random split over *all* days in
+      ``ds`` (``options.split.n_days`` is set to the number of dates in
+      ``ds.time``) using the ``train_fraction`` / ``val_fraction`` / ``seed``
+      from ``options.split``. Valid ``split_options`` keys: ``n_days``,
+      ``train_fraction``, ``val_fraction``, ``n_train``, ``n_val``,
+      ``min_day_difference``, ``seed`` -- e.g. ``split_options={"n_days": 500}``.
+    - ``split_mode="manual"``: fixed windows via ``split_options={"train_slice":
+      slice("1997-01-01", "2000-01-01"), "val_slice": slice(...)}``. Valid
+      ``split_options`` keys: ``train_slice``, ``val_slice``, ``seed``.
+
+    Passing a key that does not apply to the chosen ``split_mode`` raises a
+    ``ValueError`` naming the valid keys; unset parameters keep their defaults.
+    See :data:`mindthegap.options.SPLIT_MODE_OPTIONS`.
 
     Running it is not required: :func:`prepare_model_data` (``mode="train"``)
     calls it automatically when ``options.split`` is unresolved, and errors via
     the options validator when it is partially set but invalid. Returns
     ``options`` for chaining.
     """
-    # Default to using every day in ds for a random split, recorded explicitly
-    # on options.split so the resolved configuration states how many days were
-    # available. An explicit override (or a manual method) takes precedence.
-    method = overrides.get("method", options.split.method)
-    if method == "random" and overrides.get("n_days") is None:
-        overrides["n_days"] = int(ds["time"].sizes["time"])
+    from .options import split_options_for
+
+    resolved_mode = options.split.method if split_mode is None else split_mode
+    # Validates the mode and returns the keys that apply to it.
+    allowed = split_options_for(resolved_mode)
+
+    provided = dict(split_options or {})
+    unknown = [key for key in provided if key not in allowed]
+    if unknown:
+        raise ValueError(
+            f"split_options {sorted(unknown)} do not apply to "
+            f"split_mode={resolved_mode!r}; valid keys are {list(allowed)}."
+        )
+
+    # Default a random split to use every day in ds, recorded explicitly on
+    # options.split so the resolved configuration states how many days were
+    # available. An explicit n_days (or a manual mode) takes precedence.
+    if resolved_mode == "random" and provided.get("n_days") is None:
+        provided["n_days"] = int(ds["time"].sizes["time"])
+
     return train_validation_dates(
-        ds["time"], options, verbose=verbose, **overrides
+        ds["time"], options, method=resolved_mode, verbose=verbose, **provided
     )

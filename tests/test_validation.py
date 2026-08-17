@@ -65,7 +65,7 @@ def test_validate_split_requires_dates():
     options = Options.default(seed=1)
     with pytest.raises(OptionsValidationError) as excinfo:
         validate_options(options, requires=["split"])
-    assert "set_up_train_split" in str(excinfo.value)
+    assert "set_up_train_split_options" in str(excinfo.value)
 
 
 def test_validate_split_reports_partial_split():

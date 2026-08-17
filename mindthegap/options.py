@@ -53,6 +53,39 @@ def cloud_options_for(cloud_mode):
     return CLOUD_MODE_OPTIONS[cloud_mode] + _CLOUD_COMMON_OPTIONS
 
 
+# Which ``split_options`` keys are valid per split mode, so
+# set_up_train_split_options can accept one ``split_options`` dict and reject
+# keys that do not apply to the chosen mode instead of exposing an argument per
+# parameter (mirroring CLOUD_MODE_OPTIONS).
+SPLIT_MODE_OPTIONS = {
+    "random": (
+        "n_days",
+        "train_fraction",
+        "val_fraction",
+        "n_train",
+        "n_val",
+        "min_day_difference",
+    ),
+    "manual": ("train_slice", "val_slice"),
+}
+# Valid for any mode.
+_SPLIT_COMMON_OPTIONS = ("seed",)
+
+
+def split_options_for(split_mode):
+    """Return the ``split_options`` keys that apply to ``split_mode``.
+
+    Includes the per-mode parameters plus the common ``seed``. Raises
+    ``ValueError`` for an unknown mode.
+    """
+    if split_mode not in SPLIT_MODE_OPTIONS:
+        valid = ", ".join(repr(m) for m in SPLIT_MODE_OPTIONS)
+        raise ValueError(
+            f"split_mode must be one of {valid}, got {split_mode!r}"
+        )
+    return SPLIT_MODE_OPTIONS[split_mode] + _SPLIT_COMMON_OPTIONS
+
+
 def _to_plain(value):
     """Recursively convert a value into JSON/YAML-safe plain Python data."""
     if is_dataclass(value) and not isinstance(value, type):

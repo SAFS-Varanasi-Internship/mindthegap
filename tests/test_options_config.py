@@ -143,11 +143,11 @@ def test_train_validation_dates_rejects_unknown_method():
         )
 
 
-def test_set_up_train_split_uses_all_days_by_default():
+def test_set_up_train_split_options_uses_all_days_by_default():
     ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
     options = Options.default(data=ds, metadata=metadata, seed=7)
 
-    result = mtg.set_up_train_split(ds, options, verbose=False)
+    result = mtg.set_up_train_split_options(ds, options, verbose=False)
 
     split = options.split
     assert result is options
@@ -160,30 +160,31 @@ def test_set_up_train_split_uses_all_days_by_default():
     assert not (set(split.train_dates) & set(split.val_dates))
 
 
-def test_set_up_train_split_respects_explicit_n_days():
+def test_set_up_train_split_options_respects_explicit_n_days():
     ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
     options = Options.default(data=ds, metadata=metadata, seed=7)
 
-    mtg.set_up_train_split(ds, options, n_days=30, verbose=False)
+    mtg.set_up_train_split_options(
+        ds, options, split_options={"n_days": 30}, verbose=False
+    )
 
     assert options.split.n_days == 30
     assert len(options.split.train_dates) == 24
     assert len(options.split.val_dates) == 6
 
 
-def test_set_up_train_split_accepts_manual_override():
+def test_set_up_train_split_options_accepts_manual_mode():
     ds, metadata = make_demo_ds(days=120, lat_size=8, lon_size=8, seed=2)
     options = Options.default(data=ds, metadata=metadata, seed=7)
     times = pd.to_datetime(ds.time.values)
     train_slice = slice(str(times[0].date()), str(times[59].date()))
     val_slice = slice(str(times[60].date()), str(times[-1].date()))
 
-    mtg.set_up_train_split(
+    mtg.set_up_train_split_options(
         ds,
         options,
-        method="manual",
-        train_slice=train_slice,
-        val_slice=val_slice,
+        split_mode="manual",
+        split_options={"train_slice": train_slice, "val_slice": val_slice},
         verbose=False,
     )
 
@@ -193,7 +194,29 @@ def test_set_up_train_split_accepts_manual_override():
     assert options.split.is_resolved()
 
 
-def test_prepare_model_data_auto_runs_set_up_train_split():
+def test_set_up_train_split_options_rejects_invalid_keys():
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+
+    # train_slice does not apply to the random mode.
+    with pytest.raises(ValueError, match="do not apply to split_mode='random'"):
+        mtg.set_up_train_split_options(
+            ds,
+            options,
+            split_options={"train_slice": slice("2010-01-01", "2010-02-01")},
+            verbose=False,
+        )
+
+
+def test_set_up_train_split_options_rejects_unknown_mode():
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+
+    with pytest.raises(ValueError, match="split_mode must be one of"):
+        mtg.set_up_train_split_options(ds, options, split_mode="bogus")
+
+
+def test_prepare_model_data_auto_runs_set_up_train_split_options():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(
         data=ds, metadata=metadata, smoke_test=True, seed=1
