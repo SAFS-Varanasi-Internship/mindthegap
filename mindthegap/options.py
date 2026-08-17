@@ -25,6 +25,34 @@ from dataclasses import dataclass, field, fields, is_dataclass, replace
 from typing import Any, Optional
 
 
+# The cloud parameters that apply to each ``cloud_mode``. ``cloud_seed`` is
+# accepted for every mode (it makes the draw/shift reproducible). This is the
+# single source of truth for which ``cloud_options`` keys are valid per mode, so
+# set_up_data_options can accept one ``cloud_options`` dict and reject keys that
+# do not apply to the chosen mode instead of exposing an argument per parameter.
+CLOUD_MODE_OPTIONS = {
+    "synthetic_bank": ("cloud_coverage", "cloud_blob_sigma", "cloud_time_sigma"),
+    "synthetic": ("cloud_coverage", "cloud_blob_sigma", "cloud_time_sigma"),
+    "shift": ("missing_flag_shift",),
+}
+# Valid for any mode.
+_CLOUD_COMMON_OPTIONS = ("cloud_seed",)
+
+
+def cloud_options_for(cloud_mode):
+    """Return the ``cloud_options`` keys that apply to ``cloud_mode``.
+
+    Includes the per-mode parameters plus the common ``cloud_seed``. Raises
+    ``ValueError`` for an unknown mode.
+    """
+    if cloud_mode not in CLOUD_MODE_OPTIONS:
+        valid = ", ".join(repr(m) for m in CLOUD_MODE_OPTIONS)
+        raise ValueError(
+            f"cloud_mode must be one of {valid}, got {cloud_mode!r}"
+        )
+    return CLOUD_MODE_OPTIONS[cloud_mode] + _CLOUD_COMMON_OPTIONS
+
+
 def _to_plain(value):
     """Recursively convert a value into JSON/YAML-safe plain Python data."""
     if is_dataclass(value) and not isinstance(value, type):
@@ -304,10 +332,10 @@ class DataOptions:
         self.input_names = list(self.input_names)
         self.features = list(self.features)
         self.std_features = list(self.std_features)
-        if self.cloud_mode not in ("synthetic_bank", "synthetic", "shift"):
+        if self.cloud_mode not in CLOUD_MODE_OPTIONS:
+            valid = ", ".join(repr(m) for m in CLOUD_MODE_OPTIONS)
             raise ValueError(
-                "cloud_mode must be 'synthetic_bank', 'synthetic', or "
-                f"'shift', got {self.cloud_mode!r}"
+                f"cloud_mode must be one of {valid}, got {self.cloud_mode!r}"
             )
         if not 0 <= self.cloud_coverage <= 1:
             raise ValueError("cloud_coverage must be between 0 and 1")
@@ -527,6 +555,8 @@ class Options:
         std_target=False,
         add_geo=False,
         n_temporal_lags=1,
+        cloud_mode=None,
+        cloud_options=None,
     ):
         """Populate ``options.data`` from a loaded dataset (user-specified).
 
@@ -535,6 +565,20 @@ class Options:
         choices are optional keyword arguments. This reads identity, spatial
         bounds, and time range directly from ``ds`` (and its ``attrs`` written by
         :func:`mindthegap.demo_data`).
+
+        Synthetic-cloud configuration is grouped rather than exposed as one
+        argument per parameter. ``cloud_mode`` selects the cloud source and is
+        *not* required (default ``options.data.cloud_mode`` --
+        ``"synthetic_bank"``). ``cloud_options`` is an optional dict of only the
+        parameters that apply to the selected mode:
+
+        - ``"synthetic_bank"`` / ``"synthetic"``: ``cloud_coverage``,
+          ``cloud_blob_sigma``, ``cloud_time_sigma`` (and ``cloud_seed``),
+        - ``"shift"``: ``missing_flag_shift`` (and ``cloud_seed``).
+
+        Passing a key that does not apply to the chosen ``cloud_mode`` raises a
+        ``ValueError`` naming the valid keys; unset parameters keep their
+        defaults. See :data:`mindthegap.options.CLOUD_MODE_OPTIONS`.
 
         This does **not** resolve the gridder or fit configuration from the
         dataset. The gridder is used exactly as set on ``options.gridder``
@@ -567,7 +611,36 @@ class Options:
         self.data.log_target = bool(log_target)
         self.data.add_geo = bool(add_geo)
         self.data.n_temporal_lags = int(n_temporal_lags)
+        self._apply_cloud_options(cloud_mode, cloud_options)
         return self
+
+    def _apply_cloud_options(self, cloud_mode, cloud_options):
+        """Set ``cloud_mode`` and only the cloud parameters valid for it.
+
+        ``cloud_mode`` defaults to the current ``options.data.cloud_mode``.
+        ``cloud_options`` may contain only keys returned by
+        :func:`cloud_options_for` for the chosen mode; anything else raises a
+        ``ValueError`` so mode/parameter mismatches surface immediately.
+        """
+        resolved_mode = (
+            self.data.cloud_mode if cloud_mode is None else cloud_mode
+        )
+        # Validates the mode and returns the keys that apply to it.
+        allowed = cloud_options_for(resolved_mode)
+        self.data.cloud_mode = resolved_mode
+
+        options = dict(cloud_options or {})
+        unknown = [key for key in options if key not in allowed]
+        if unknown:
+            raise ValueError(
+                f"cloud_options {sorted(unknown)} do not apply to "
+                f"cloud_mode={resolved_mode!r}; valid keys are "
+                f"{list(allowed)}."
+            )
+        for key, value in options.items():
+            setattr(self.data, key, value)
+        # Re-run field validation (e.g. cloud_coverage range, cloud_mode).
+        self.data.__post_init__()
 
     def set_data_config(self, data, metadata=None):
         """Populate all data-dependent configuration from a dataset.

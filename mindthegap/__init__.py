@@ -43,6 +43,8 @@ from .options import (
     GridderOptions,
     FitOptions,
     SplitOptions,
+    CLOUD_MODE_OPTIONS,
+    cloud_options_for,
 )
 from . import cloud_bank
 # Expose the viz module as a submodule (lazy import by users)
@@ -79,6 +81,8 @@ __all__ = [
     "GridderOptions",
     "FitOptions",
     "SplitOptions",
+    "CLOUD_MODE_OPTIONS",
+    "cloud_options_for",
     "cloud_bank",
     "viz",
 ]

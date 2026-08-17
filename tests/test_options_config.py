@@ -197,6 +197,114 @@ def test_data_options_log_target_defaults_false():
     assert Options.default().data.log_target is False
 
 
+def test_set_up_data_options_cloud_mode_defaults_to_synthetic_bank():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    options.set_up_data_options(
+        ds, target="chlor_a", missing_flag="cloud_flag", land_flag="land_flag"
+    )
+
+    # cloud_mode is not a required argument; default is "synthetic_bank".
+    assert options.data.cloud_mode == "synthetic_bank"
+    assert options.data.cloud_coverage == 0.4
+
+
+def test_set_up_data_options_applies_cloud_options_dict():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    options.set_up_data_options(
+        ds,
+        target="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        cloud_options={
+            "cloud_coverage": 0.6,
+            "cloud_blob_sigma": 8.0,
+            "cloud_seed": 7,
+        },
+    )
+
+    assert options.data.cloud_coverage == 0.6
+    assert options.data.cloud_blob_sigma == 8.0
+    assert options.data.cloud_seed == 7
+
+
+def test_set_up_data_options_shift_mode_options():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    options.set_up_data_options(
+        ds,
+        target="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        cloud_mode="shift",
+        cloud_options={"missing_flag_shift": 5},
+    )
+
+    assert options.data.cloud_mode == "shift"
+    assert options.data.missing_flag_shift == 5
+
+
+def test_set_up_data_options_rejects_option_not_valid_for_mode():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    with pytest.raises(ValueError, match="do not apply to cloud_mode='shift'"):
+        options.set_up_data_options(
+            ds,
+            target="chlor_a",
+            missing_flag="cloud_flag",
+            land_flag="land_flag",
+            cloud_mode="shift",
+            cloud_options={"cloud_coverage": 0.5},
+        )
+
+
+def test_set_up_data_options_rejects_unknown_cloud_mode():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    with pytest.raises(ValueError, match="cloud_mode must be one of"):
+        options.set_up_data_options(
+            ds,
+            target="chlor_a",
+            missing_flag="cloud_flag",
+            land_flag="land_flag",
+            cloud_mode="bogus",
+        )
+
+
+def test_set_up_data_options_validates_cloud_option_values():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    with pytest.raises(ValueError, match="cloud_coverage must be between"):
+        options.set_up_data_options(
+            ds,
+            target="chlor_a",
+            missing_flag="cloud_flag",
+            land_flag="land_flag",
+            cloud_options={"cloud_coverage": 1.5},
+        )
+
+
+def test_cloud_options_for_lists_valid_keys():
+    from mindthegap import cloud_options_for
+
+    assert cloud_options_for("synthetic_bank") == (
+        "cloud_coverage",
+        "cloud_blob_sigma",
+        "cloud_time_sigma",
+        "cloud_seed",
+    )
+    assert cloud_options_for("shift") == ("missing_flag_shift", "cloud_seed")
+    with pytest.raises(ValueError, match="cloud_mode must be one of"):
+        cloud_options_for("bogus")
+
+
 def test_prepare_model_data_reads_config_from_options():
     ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
     options = Options.default(data=ds, metadata=metadata, smoke_test=True, seed=1)
