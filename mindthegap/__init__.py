@@ -1,4 +1,18 @@
 # Re-export the primary functions (explicit, stable API)
+
+
+def _resolve_version():
+    """Return the installed ``mindthegap`` version, or ``"unknown"``."""
+    try:
+        from importlib.metadata import version
+
+        return version("mindthegap")
+    except Exception:
+        return "unknown"
+
+
+__version__ = _resolve_version()
+
 from .data import (
     demo_data,
     crop_to_multiple,
@@ -52,6 +66,7 @@ from . import cloud_bank
 from . import viz  # users can do: from mindthegap import viz; viz.plot_prediction_observed(...)
 
 __all__ = [
+    "__version__",
     "demo_data",
     "crop_to_multiple",
     "unstdize",
