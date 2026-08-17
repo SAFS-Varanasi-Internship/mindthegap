@@ -101,14 +101,28 @@ def _check_data_prepared(options):
 
 def _check_split(options):
     """Return problems if the train/validation split has not been resolved."""
-    if options.split.is_resolved():
+    split = options.split
+    if split.is_resolved():
         return []
+    has_train = bool(split.train_dates)
+    has_val = bool(split.val_dates)
+    if has_train != has_val:
+        # Partially set: one side has dates and the other does not.
+        missing = "val_dates" if has_train else "train_dates"
+        present = "train_dates" if has_train else "val_dates"
+        return [
+            f"options.split is partially set: {present} has dates but "
+            f"{missing} is empty. Both are needed. Re-run "
+            "mtg.set_up_train_split(ds, options) to choose them together, or "
+            f"set options.split.{missing} to match."
+        ]
     return [
         "options.split has no train/validation dates. They select which dates "
         "train the model and which validate it. Resolve them with "
-        "mtg.train_validation_dates(ds.time, options) (mode='train' also does "
-        "this automatically), or set options.split.train_dates / "
-        "options.split.val_dates manually with method='manual'."
+        "mtg.set_up_train_split(ds, options) (a random split over all days; "
+        "mode='train' also does this automatically), or set "
+        "options.split.train_dates / options.split.val_dates manually with "
+        "method='manual'."
     ]
 
 

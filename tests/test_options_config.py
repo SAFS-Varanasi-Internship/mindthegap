@@ -1,5 +1,7 @@
+import pandas as pd
 import pytest
 
+import mindthegap as mtg
 from mindthegap import (
     FitOptions,
     GridderOptions,
@@ -139,6 +141,88 @@ def test_train_validation_dates_rejects_unknown_method():
         train_validation_dates(
             ds.time, Options.default(data=ds, metadata=metadata), method="bogus"
         )
+
+
+def test_set_up_train_split_uses_all_days_by_default():
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+
+    result = mtg.set_up_train_split(ds, options, verbose=False)
+
+    split = options.split
+    assert result is options
+    assert split.method == "random"
+    assert split.is_resolved()
+    # n_days defaults to every date in ds.time and is recorded on the split.
+    assert split.n_days == ds.sizes["time"]
+    assert len(split.train_dates) == 48
+    assert len(split.val_dates) == 12
+    assert not (set(split.train_dates) & set(split.val_dates))
+
+
+def test_set_up_train_split_respects_explicit_n_days():
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+
+    mtg.set_up_train_split(ds, options, n_days=30, verbose=False)
+
+    assert options.split.n_days == 30
+    assert len(options.split.train_dates) == 24
+    assert len(options.split.val_dates) == 6
+
+
+def test_set_up_train_split_accepts_manual_override():
+    ds, metadata = make_demo_ds(days=120, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+    times = pd.to_datetime(ds.time.values)
+    train_slice = slice(str(times[0].date()), str(times[59].date()))
+    val_slice = slice(str(times[60].date()), str(times[-1].date()))
+
+    mtg.set_up_train_split(
+        ds,
+        options,
+        method="manual",
+        train_slice=train_slice,
+        val_slice=val_slice,
+        verbose=False,
+    )
+
+    assert options.split.method == "manual"
+    # n_days is not forced for a manual split.
+    assert options.split.n_days is None
+    assert options.split.is_resolved()
+
+
+def test_prepare_model_data_auto_runs_set_up_train_split():
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(
+        data=ds, metadata=metadata, smoke_test=True, seed=1
+    )
+    options.verbose = False
+
+    from mindthegap import prepare_model_data
+
+    prepare_model_data(ds, options, mode="train")
+
+    assert options.split.is_resolved()
+    assert options.split.method == "random"
+
+
+def test_prepare_model_data_errors_on_partial_split():
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(
+        data=ds, metadata=metadata, smoke_test=True, seed=1
+    )
+    options.verbose = False
+    # Only train_dates set, no val_dates: partially set and invalid.
+    options.split.train_dates = [
+        str(d.date()) for d in pd.to_datetime(ds.time.values[:5])
+    ]
+
+    from mindthegap import prepare_model_data, OptionsValidationError
+
+    with pytest.raises(OptionsValidationError, match="partially set"):
+        prepare_model_data(ds, options, mode="train")
 
 
 @pytest.mark.parametrize("n_days", [0, -1, 1.5, True])

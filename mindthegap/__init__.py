@@ -5,6 +5,7 @@ from .data import (
     prepare_model_data,
     synthetic_cloud_cube,
     train_validation_dates,
+    set_up_train_split,
 )
 from .evaluation import (
     unstdize,
@@ -63,6 +64,7 @@ __all__ = [
     "unet_spatial_multiple",
     "make_generator",
     "train_validation_dates",
+    "set_up_train_split",
     "fit_model",
     "gapfill_std",
     "UNet",
