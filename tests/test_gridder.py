@@ -156,8 +156,8 @@ def test_set_up_gridder_whole_field_no_overlap():
     assert rec.overlap is None
     assert rec.batch_size == 8
     assert rec.n_channels == 9
-    # apply=False must not mutate options.
-    assert options.gridder.tile_size == (64, 64)
+    # apply=False must not mutate options (gridder stays unset).
+    assert options.gridder.tile_size is None
 
 
 def test_set_up_gridder_tiles_large_field_with_overlap():
@@ -210,7 +210,7 @@ def test_set_up_gridder_none_apply_defaults_to_no_apply_without_tty():
         ds, options, gridder_options={"gpu_memory_gb": 16.0}, apply=None
     )
 
-    assert options.gridder.tile_size == (64, 64)
+    assert options.gridder.tile_size is None
 
 
 def test_set_up_gridder_rejects_unknown_gridder_options():

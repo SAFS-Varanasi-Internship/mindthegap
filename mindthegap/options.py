@@ -136,20 +136,21 @@ class GridderOptions:
     """How the prepared dataset is split into spatial/temporal patches.
 
     ``tile_size`` may be an int, a ``(lat, lon)`` pair, or the string
-    ``"full"``. Use ``"full"`` to treat the entire field as a single tile.
-    These settings are used exactly as given -- the pipeline never auto-derives
-    or adjusts them from the dataset (a separate tile-selection step may do that
-    before :func:`mindthegap.prepare_model_data` is called).
+    ``"full"``. Use ``"full"`` to treat the entire field as a single tile. It
+    defaults to ``None`` meaning *unset*: no tiling has been chosen yet, so
+    :func:`mindthegap.train_model` (via :func:`mindthegap.prepare_model_data`)
+    sizes it automatically with :func:`mindthegap.set_up_gridder_options`. Once
+    set (a pair or ``"full"``), the pipeline uses it exactly as given.
     """
 
     method: str = "xbatcher"
-    tile_size: tuple = (64, 64)
+    tile_size: Optional[tuple] = None
     overlap: Optional[tuple] = None
     time_chunk: int = 100
     preload_batch: bool = False
 
     def __post_init__(self):
-        if not self._is_full(self.tile_size):
+        if self.tile_size is not None and not self._is_full(self.tile_size):
             self.tile_size = _coerce_pair(self.tile_size, "tile_size")
         self.overlap = _coerce_pair(self.overlap, "overlap")
         if self.method != "xbatcher":
@@ -159,6 +160,10 @@ class GridderOptions:
             )
         if self.time_chunk <= 0:
             raise ValueError("time_chunk must be a positive integer")
+
+    def is_resolved(self):
+        """Return ``True`` once a tile size (a pair or ``"full"``) is set."""
+        return self.tile_size is not None
 
     @staticmethod
     def _is_full(value):
@@ -510,11 +515,14 @@ class Options:
         ``data`` starts unresolved and is populated by the pipeline. When a
         loaded dataset ``data`` (and its ``metadata``) is supplied, the
         data-dependent variable names/bounds are populated via
-        :meth:`set_data_config`. The gridder is **not** derived from the
-        dataset -- it is used exactly as set on ``options.gridder`` (default
-        ``(64, 64)`` tiles, ``time_chunk=100``); set it yourself for different
-        tiling. When ``smoke_test`` is true the run is configured to be fast: a
-        small ``(16, 16)`` tile with ``time_chunk=10`` (so the tiny synthetic
+        :meth:`set_data_config`. The gridder is left **unset**
+        (``options.gridder.tile_size is None``); it is sized automatically from
+        the dataset/device by :func:`mindthegap.train_model` (via
+        :func:`mindthegap.prepare_model_data`) with
+        :func:`mindthegap.set_up_gridder_options`, or you may run that helper
+        (or set ``options.gridder`` directly) yourself for full control. When
+        ``smoke_test`` is true the run is configured to be fast: a small
+        ``(16, 16)`` tile with ``time_chunk=10`` (so the tiny synthetic
         datasets used for smoke tests fit) and ``fit.epochs`` capped at 2. The
         user can still override any of these afterwards.
 
@@ -614,12 +622,14 @@ class Options:
         defaults. See :data:`mindthegap.options.CLOUD_MODE_OPTIONS`.
 
         This does **not** resolve the gridder or fit configuration from the
-        dataset. The gridder is used exactly as set on ``options.gridder``
-        (default ``(64, 64)`` tiles, ``time_chunk=100``); set it yourself if you
-        want different tiling. The train/validation split is also left
-        unresolved. Standardization statistics and the final input channel order
-        are filled in later by :func:`mindthegap.prepare_model_data`. Returns
-        ``self`` for chaining.
+        dataset. The gridder is left unset (``options.gridder.tile_size is
+        None``); it is sized automatically during
+        :func:`mindthegap.prepare_model_data` (``mode="train"``) via
+        :func:`mindthegap.set_up_gridder_options`, or set it yourself for full
+        control. The train/validation split is also left unresolved.
+        Standardization statistics and the final input channel order are filled
+        in later by :func:`mindthegap.prepare_model_data`. Returns ``self`` for
+        chaining.
         """
         for name in (target, missing_flag, land_flag):
             if name not in ds:

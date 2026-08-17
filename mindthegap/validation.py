@@ -127,7 +127,7 @@ def _check_split(options):
 
 
 def _check_gridder(options):
-    """Return problems if the gridder method is unsupported."""
+    """Return problems if the gridder method is unsupported or unresolved."""
     if options.gridder.method != "xbatcher":
         return [
             f"options.gridder.method={options.gridder.method!r} is not "
@@ -135,6 +135,14 @@ def _check_gridder(options):
             "options.gridder = mtg.GridderOptions(method='xbatcher', "
             "tile_size=(64, 64)) (or run mtg.set_up_gridder_options(ds, "
             "options) for a memory-aware recommendation)."
+        ]
+    if not options.gridder.is_resolved():
+        return [
+            "options.gridder.tile_size is not set, so no spatial tiling has "
+            "been chosen. It is normally sized automatically during "
+            "ds_std = mtg.prepare_model_data(ds, options, mode='train'); run "
+            "that first, or set it explicitly with mtg.set_up_gridder_options"
+            "(ds, options) or options.gridder.tile_size = (64, 64) / 'full'."
         ]
     return []
 

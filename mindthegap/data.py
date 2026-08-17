@@ -914,6 +914,16 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         # Preserve chronological order to keep the time coordinate monotonic.
         fit_dates = fit_index.sort_values()
 
+        if not full.gridder.is_resolved():
+            # No tiling chosen yet: size the tile/time-chunk/batch to the
+            # dataset and device (and options.split.n_days) automatically, so
+            # the output chunking below and the training pipeline use a real,
+            # memory-aware gridder rather than an unset placeholder. Applied
+            # without prompting because train_model runs non-interactively.
+            from .gridder import set_up_gridder_options
+
+            set_up_gridder_options(ds, full, apply=True)
+
     if mode in ("test", "gapfill") and not dry_run and not full.data.standardization:
         raise OptionsValidationError(
             f"options is missing configuration required for mode={mode!r}:\n"

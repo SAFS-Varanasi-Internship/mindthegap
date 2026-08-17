@@ -45,12 +45,13 @@ def _resolved_options(**overrides):
     data.transforms = {"target": "natural logarithm", "temporal_lags": 1}
     data.missing_value_handling = "Replace NaN inputs with zero."
     # A saved bundle is the product of a completed training run, so its options
-    # must also carry a resolved split (and a valid gridder, which is the
-    # default). Populate a minimal manual split so the fixture is a fully valid
-    # training configuration.
+    # must also carry a resolved split and gridder. Populate a minimal manual
+    # split and an explicit tile so the fixture is a fully valid training
+    # configuration.
     options.split.method = "manual"
     options.split.train_dates = ["2010-01-01", "2010-01-02", "2010-01-03"]
     options.split.val_dates = ["2010-01-04"]
+    options.gridder.tile_size = (64, 64)
     for key, value in overrides.items():
         setattr(data, key, value)
     return options

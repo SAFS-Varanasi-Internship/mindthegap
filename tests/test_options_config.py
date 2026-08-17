@@ -15,7 +15,9 @@ from conftest import make_demo_ds
 def test_gridder_defaults_are_used_as_is():
     gridder = GridderOptions()
 
-    assert gridder.tile_size == (64, 64)
+    # tile_size defaults to unset (None); time_chunk keeps its default.
+    assert gridder.tile_size is None
+    assert not gridder.is_resolved()
     assert gridder.time_chunk == 100
 
 
@@ -258,7 +260,7 @@ def test_set_data_config_leaves_gridder_default_and_split_unresolved():
     ds, _ = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default()
 
-    assert options.gridder.tile_size == (64, 64)
+    assert options.gridder.tile_size is None
     assert options.split.is_resolved() is False
 
 
@@ -275,8 +277,8 @@ def test_set_data_config_populates_data_from_metadata():
     assert options.data.missing_flag == "cloud_flag"
     assert options.data.land_flag == "land_flag"
     assert options.data.lat_bounds is not None
-    # set_data_config never touches the gridder; it stays at its default.
-    assert options.gridder.tile_size == (64, 64)
+    # set_data_config never touches the gridder; it stays unset.
+    assert options.gridder.tile_size is None
     assert options.split.is_resolved() is False
 
 
@@ -286,8 +288,8 @@ def test_default_with_data_leaves_gridder_at_default():
     options = Options.default(data=ds, metadata=metadata)
 
     assert options.data.target_variable == "chlor_a"
-    # The gridder is used exactly as configured -- no dataset-derived tiling.
-    assert options.gridder.tile_size == (64, 64)
+    # The gridder is left unset -- train_model sizes it automatically.
+    assert options.gridder.tile_size is None
 
 
 def test_default_smoke_test_uses_small_gridder():
