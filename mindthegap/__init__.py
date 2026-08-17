@@ -36,6 +36,7 @@ from .training import (
     train_model,
     TrainingResult,
 )
+from .session import set_up
 from .options import (
     Options,
     DataOptions,
@@ -72,6 +73,7 @@ __all__ = [
     "OptionsValidationError",
     "train_model",
     "TrainingResult",
+    "set_up",
     "Options",
     "DataOptions",
     "GridderOptions",
