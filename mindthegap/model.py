@@ -65,8 +65,39 @@ def unet_spatial_multiple(build_fn=None):
     return factor if factor > 1 else 2 ** UNET_DEPTH
 
 
+# def make_tf_gen(batcher, x_vars, label="full_target"):
+#     """Create a TensorFlow generator from standardized xbatcher blocks."""
+
+#     def gen():
+#         for batch in batcher:
+#             batch = batch.load()
+#             for time_index in range(batch.sizes["time"]):
+#                 x = np.stack(
+#                     [
+#                         np.nan_to_num(
+#                             batch[var].isel(time=time_index).values,
+#                             nan=0.0,
+#                         )
+#                         for var in x_vars
+#                     ],
+#                     axis=-1,
+#                 ).astype(np.float32)
+#                 y = np.nan_to_num(
+#                     batch[label].isel(time=time_index).values,
+#                     nan=0.0,
+#                 ).astype(np.float32)[..., np.newaxis]
+#                 yield x, y
+
+#     return gen
+""" CHANGE TO MAKE IT MULTIVAR OUTPUT """ 
 def make_tf_gen(batcher, x_vars, label="full_target"):
-    """Create a TensorFlow generator from standardized xbatcher blocks."""
+    """Create a TensorFlow generator from standardized xbatcher blocks.
+
+    ``label`` may be a single variable name or a list of names. A list stacks
+    those variables along the channel axis, so the model is trained to predict
+    all of them jointly; a single name yields one channel, as before.
+    """
+    labels = [label] if isinstance(label, str) else list(label)
 
     def gen():
         for batch in batcher:
@@ -82,14 +113,19 @@ def make_tf_gen(batcher, x_vars, label="full_target"):
                     ],
                     axis=-1,
                 ).astype(np.float32)
-                y = np.nan_to_num(
-                    batch[label].isel(time=time_index).values,
-                    nan=0.0,
-                ).astype(np.float32)[..., np.newaxis]
+                y = np.stack(
+                    [
+                        np.nan_to_num(
+                            batch[name].isel(time=time_index).values,
+                            nan=0.0,
+                        )
+                        for name in labels
+                    ],
+                    axis=-1,
+                ).astype(np.float32)
                 yield x, y
 
     return gen
-
 
 def make_xbatcher(
     ds,
@@ -157,13 +193,25 @@ def make_generator(ds_std, options, *, verbose=None):
     train_batcher = make_xbatcher(ds_train, options=train_gridder)
     val_batcher = make_xbatcher(ds_val, options=val_gridder)
 
+    # num_channels = len(options.data.input_names)
+    # tile_lat, tile_lon = options.gridder.tile_size
+    # output_signature = (
+    #     tf.TensorSpec(
+    #         shape=(tile_lat, tile_lon, num_channels), dtype=tf.float32
+    #     ),
+    #     tf.TensorSpec(shape=(tile_lat, tile_lon, 1), dtype=tf.float32),
+    # )
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """ 
     num_channels = len(options.data.input_names)
+    num_targets = max(1, len(options.data.targets))
     tile_lat, tile_lon = options.gridder.tile_size
     output_signature = (
         tf.TensorSpec(
             shape=(tile_lat, tile_lon, num_channels), dtype=tf.float32
         ),
-        tf.TensorSpec(shape=(tile_lat, tile_lon, 1), dtype=tf.float32),
+        tf.TensorSpec(
+            shape=(tile_lat, tile_lon, num_targets), dtype=tf.float32
+        ),
     )
 
     train_dataset = (
@@ -171,7 +219,7 @@ def make_generator(ds_std, options, *, verbose=None):
             make_tf_gen(
                 train_batcher,
                 options.data.input_names,
-                label=options.data.target,
+                label=options.data.targets,
             ),
             output_signature=output_signature,
         )
@@ -189,7 +237,7 @@ def make_generator(ds_std, options, *, verbose=None):
             make_tf_gen(
                 val_batcher,
                 options.data.input_names,
-                label=options.data.target,
+                label=options.data.targets,
             ),
             output_signature=output_signature,
         )
@@ -217,7 +265,7 @@ def make_generator(ds_std, options, *, verbose=None):
     return train_dataset, val_dataset, train_steps, val_steps
 
 
-def UNet(input_shape, verbose=None, tile_size=None, input_names=None):
+def UNet(input_shape, verbose=None, tile_size=None, input_names=None, out_channels=1):
     """Build the fully convolutional U-Net used by the fitting notebook.
 
     ``input_shape`` is the Keras input shape ``(height, width, channels)``;
@@ -294,7 +342,7 @@ def UNet(input_shape, verbose=None, tile_size=None, input_names=None):
         activation="relu",
     )(x)
     outputs = layers.Conv2D(
-        1,
+        out_channels,
         (3, 3),
         padding="same",
         activation="linear",

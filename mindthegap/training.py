@@ -255,6 +255,7 @@ def train_model(
         verbose=verbose,
         tile_size=options.gridder.tile_size,
         input_names=options.data.input_names,
+        out_channels=len(options.data.targets) or 1,
     )
 
     # 4. Fit (fit_model compiles with options.fit + metrics=["mae"]).
