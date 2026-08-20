@@ -1,39 +1,82 @@
 # Re-export the primary functions (explicit, stable API)
-from .create_zarr import create_zarr, data_preprocessing, data_preprocessing_new
-from .utils import (
+from .data import (
+    demo_data,
     crop_to_multiple,
+    prepare_model_data,
+    synthetic_cloud_cube,
+    train_validation_dates,
+)
+from .evaluation import (
     unstdize,
     compute_mae,
     compute_mse,
+)
+from .model import (
     make_tf_gen,
-    build_standardized_lazy_new,
-    build_standardized_lazy,
     make_xbatcher,
+    make_generator,
+    fit_model,
+    gapfill_std,
     UNet,
 )
 from .model_bundle import (
-    ModelBundle,
-    save_model_bundle,
     load_model_bundle,
+    load_bundle_metrics,
+    save_model_bundle,
 )
+from .gridder import (
+    set_up_gridder,
+    GridderRecommendation,
+)
+from .validation import (
+    validate_options,
+    OptionsValidationError,
+)
+from .training import (
+    train_model,
+    TrainingResult,
+)
+from .options import (
+    Options,
+    DataOptions,
+    GridderOptions,
+    FitOptions,
+    SplitOptions,
+)
+from . import cloud_bank
 # Expose the viz module as a submodule (lazy import by users)
 from . import viz  # users can do: from mindthegap import viz; viz.plot_prediction_observed(...)
 
 __all__ = [
-    "create_zarr",
-    "data_preprocessing",
-    "data_preprocessing_new",
+    "demo_data",
     "crop_to_multiple",
     "unstdize",
     "compute_mae",
     "compute_mse",
     "make_tf_gen",
-    "build_standardized_lazy_new",
-    "build_standardized_lazy",
+    "prepare_model_data",
+    "synthetic_cloud_cube",
     "make_xbatcher",
+    "unet_spatial_multiple",
+    "make_generator",
+    "train_validation_dates",
+    "fit_model",
+    "gapfill_std",
     "UNet",
-    "ModelBundle",
     "save_model_bundle",
     "load_model_bundle",
+    "load_bundle_metrics",
+    "set_up_gridder",
+    "GridderRecommendation",
+    "validate_options",
+    "OptionsValidationError",
+    "train_model",
+    "TrainingResult",
+    "Options",
+    "DataOptions",
+    "GridderOptions",
+    "FitOptions",
+    "SplitOptions",
+    "cloud_bank",
     "viz",
 ]

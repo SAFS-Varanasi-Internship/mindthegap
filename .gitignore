@@ -1,21 +1,18 @@
 .ipynb_checkpoints/*
 mindthegap/.ipynb_checkpoints/*
-.github/.ipynb_checkpoints/*
-.github/workflows/.ipynb_checkpoints/*
-scripts/.ipynb_checkpoints/*
-
 .python-version
 *checkpoint.ipynb
 mindthegap/__pycache__
+tests/__pycache__
 data/
 Untitled*
 
 *.egg-info
 
-models/
-tests/__pycache__
+__pycache__/
+.ipynb_checkpoints/
 
+models/
 # Cloud-bank binaries are distributed as GitHub Release assets, not tracked
-# in git. Regenerate with scripts/make_cloud_bank.py; upload with
-# scripts/upload_cloud_banks.sh (gh release).
+# in git. Regenerate with scripts/make_cloud_bank.py; upload with gh release.
 assets/cloud_banks/*.nc

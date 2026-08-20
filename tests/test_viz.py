@@ -1,119 +1,150 @@
-import pathlib
-import sys
+import matplotlib
 
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-
-from mindthegap.viz import _map_extent, plot_prediction_observed
+from mindthegap import viz, Options
 
 
-class _DummyModel:
-    def predict(self, x, verbose=0):
-        return np.zeros((x.shape[0], x.shape[1], x.shape[2], 1), dtype=float)
-
-
-class _DummyAxis:
+class _Model:
     def __init__(self):
-        self.imshow_calls = []
-        self.set_extent_calls = []
-        self.set_box_aspect_calls = []
-        self.set_xticks_calls = []
-        self.set_yticks_calls = []
+        self.last_input = None
 
-    def imshow(self, *args, **kwargs):
-        self.imshow_calls.append(kwargs)
-        return object()
-
-    def add_feature(self, *args, **kwargs):
-        return None
-
-    def set_extent(self, *args, **kwargs):
-        self.set_extent_calls.append((args, kwargs))
-        return None
-
-    def set_box_aspect(self, *args, **kwargs):
-        self.set_box_aspect_calls.append((args, kwargs))
-        return None
-
-    def set_xlabel(self, *args, **kwargs):
-        return None
-
-    def set_ylabel(self, *args, **kwargs):
-        return None
-
-    def set_xticks(self, *args, **kwargs):
-        self.set_xticks_calls.append((args, kwargs))
-        return None
-
-    def set_yticks(self, *args, **kwargs):
-        self.set_yticks_calls.append((args, kwargs))
-        return None
-
-    def set_title(self, *args, **kwargs):
-        return None
+    def predict(self, values, verbose=0):
+        self.last_input = values
+        shape = (*values.shape[:3], 1)
+        return np.zeros(shape, dtype="float32")
 
 
-class _DummyColorbarAxis:
-    def set_ylabel(self, *args, **kwargs):
-        return None
-
-
-class _DummyFig:
-    def add_axes(self, *args, **kwargs):
-        return _DummyColorbarAxis()
-
-    def colorbar(self, *args, **kwargs):
-        return type("Colorbar", (), {"ax": _DummyColorbarAxis()})()
-
-    def subplots_adjust(self, *args, **kwargs):
-        return None
-
-
-def test_map_extent_uses_pixel_edges():
-    ds = xr.Dataset(coords={"lon": [10.0, 10.5, 11.0, 11.5], "lat": [4.0, 3.5, 3.0]})
-
-    assert _map_extent(ds) == [9.75, 11.75, 2.75, 4.25]
-
-
-def test_plot_prediction_observed_uses_coordinate_extent(monkeypatch, tmp_path):
-    time = np.array(["2020-09-08"], dtype="datetime64[ns]")
-    coords = {"time": time, "lat": [4.0, 3.5, 3.0], "lon": [10.0, 10.5, 11.0, 11.5]}
+def _dataset():
+    coords = {
+        "time": np.array(["2020-09-08"], dtype="datetime64[ns]"),
+        "lat": [4.0, 3.5, 3.0],
+        "lon": [10.0, 10.5, 11.0, 11.5],
+    }
     shape = (1, 3, 4)
-
-    zarr_stdized = xr.Dataset(
-        data_vars={
-            "feature": (("time", "lat", "lon"), np.zeros(shape)),
-            "CHL": (("time", "lat", "lon"), np.zeros(shape)),
+    return xr.Dataset(
+        {
+            "channel_b": (("time", "lat", "lon"), np.full(shape, 2.0)),
+            "channel_a": (("time", "lat", "lon"), np.full(shape, 1.0)),
+            "full_target": (("time", "lat", "lon"), np.full(shape, 1.0)),
             "land_flag": (("time", "lat", "lon"), np.zeros(shape)),
-            "real_cloud_flag": (("time", "lat", "lon"), np.zeros(shape)),
-            "valid_CHL_flag": (("time", "lat", "lon"), np.ones(shape)),
-            "fake_cloud_flag": (("time", "lat", "lon"), np.zeros(shape)),
+            "unavailable_flag": (
+                ("time", "lat", "lon"),
+                np.zeros(shape),
+            ),
+            "estimate_flag": (
+                ("time", "lat", "lon"),
+                np.zeros(shape),
+            ),
         },
         coords=coords,
     )
-    zarr_ds = xr.Dataset(
-        data_vars={"CHL_cmes-level3": (("time", "lat", "lon"), np.ones(shape))},
-        coords=coords,
+
+
+def _options():
+    options = Options.default(seed=1)
+    options.data.target = "full_target"
+    options.data.input_names = ["channel_a", "channel_b"]
+    options.data.standardization = {
+        "full_target": {"mean": 2.0, "std": 3.0, "applied": True}
+    }
+    return options
+
+
+def test_map_extent_uses_pixel_edges():
+    assert viz._map_extent(_dataset()) == [9.75, 11.75, 2.75, 4.25]
+
+
+def test_predict_frame_uses_options_order_and_unstandardizes():
+    model = _Model()
+
+    prediction = viz.predict_frame(
+        _dataset(),
+        model,
+        _options(),
+        "2020-09-08",
     )
 
-    np.save(tmp_path / "demo.npy", {"CHL": np.array([0.0, 1.0])})
+    assert prediction.dims == ("lat", "lon")
+    assert np.all(prediction.values == 2.0)
+    assert np.all(model.last_input[..., 0] == 1.0)
+    assert np.all(model.last_input[..., 1] == 2.0)
 
-    axes = np.array([[_DummyAxis(), _DummyAxis()], [_DummyAxis(), _DummyAxis()]])
-    fig = _DummyFig()
 
-    monkeypatch.setattr("mindthegap.viz.plt.subplots", lambda *args, **kwargs: (fig, axes))
-    monkeypatch.setattr("mindthegap.viz.plt.show", lambda: None)
+def test_observed_and_flag_frames():
+    dataset = _dataset()
+    dataset["land_flag"][0, 0, 0] = 1
+    dataset["estimate_flag"][0, 0, 1] = 1
+    dataset["unavailable_flag"][0, 0, 2] = 1
 
-    plot_prediction_observed(zarr_stdized, zarr_ds, "demo", _DummyModel(), time[0], datadir=tmp_path)
+    observed = viz.observed_frame(
+        dataset,
+        _options(),
+        "2020-09-08",
+    )
+    flags = viz.flag_frame(dataset, "2020-09-08")
 
-    expected_extent = [9.75, 11.75, 2.75, 4.25]
-    assert axes[0, 0].imshow_calls[0]["extent"] == expected_extent
-    assert axes[0, 1].imshow_calls[0]["extent"] == expected_extent
-    assert axes[0, 0].set_extent_calls[0][0][0] == expected_extent
-    assert axes[0, 1].set_extent_calls[0][0][0] == expected_extent
-    assert axes[0, 0].set_box_aspect_calls[0][0][0] == 0.75
-    assert axes[0, 1].set_box_aspect_calls[0][0][0] == 0.75
-    assert np.allclose(axes[0, 0].set_xticks_calls[0][0][0] % 5, 0)
-    assert np.allclose(axes[0, 0].set_yticks_calls[0][0][0] % 5, 0)
+    assert np.all(observed.values == 5.0)
+    assert flags.values[0, :4].tolist() == [0, 1, 3, 2]
+
+
+def test_individual_panels_and_composite_share_prediction():
+    dataset = _dataset()
+    options = _options()
+    model = _Model()
+    date = "2020-09-08"
+
+    figure, axes = viz.plot_prediction_observed(
+        dataset,
+        model,
+        options,
+        date,
+    )
+
+    assert axes.shape == (2, 2)
+    assert len(axes[0, 0].images) == 1
+    assert len(axes[0, 1].images) == 1
+    assert len(axes[1, 0].images) == 1
+    assert len(axes[1, 1].images) == 1
+    assert np.all(axes[0, 0].images[0].get_array() == 5.0)
+    assert np.all(axes[1, 0].images[0].get_array() == 2.0)
+    assert np.all(axes[1, 1].images[0].get_array() == 3.0)
+    plt.close(figure)
+
+
+def test_land_is_overlaid_without_masking_data():
+    dataset = _dataset()
+    dataset["land_flag"][0, 0, 0] = 1
+
+    image = viz.plot_observed(
+        dataset,
+        _options(),
+        "2020-09-08",
+        colorbar=False,
+    )
+    ax = image.axes
+    # A separate land overlay image is added on top of the data image.
+    assert len(ax.images) == 2
+    # The data image itself is untouched (no pixels set to NaN for land/clouds),
+    # so observed values stay colored and gaps remain the white background.
+    assert np.all(image.get_array() == 5.0)
+    assert not np.ma.is_masked(image.get_array())
+    plt.close(ax.figure)
+
+
+def test_no_land_overlay_when_no_land():
+    dataset = _dataset()  # land_flag all zero
+
+    image = viz.plot_observed(
+        dataset,
+        _options(),
+        "2020-09-08",
+        colorbar=False,
+    )
+    ax = image.axes
+    assert len(ax.images) == 1
+    plt.close(ax.figure)
