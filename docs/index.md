@@ -36,3 +36,12 @@ flowchart TB
 - [Installation](installation.md)
 - [API Reference](api.md)
 - [Source on GitHub](https://github.com/SAFS-Varanasi-Internship/mindthegap)
+
+## Authors
+
+- Eli Holmes
+- Troy Russo
+- Kaira Nair
+- Yifei Hang
+- Shridhar Sinha
+
