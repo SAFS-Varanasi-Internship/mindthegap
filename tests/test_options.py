@@ -16,7 +16,10 @@ def test_default_options_are_valid():
     options = Options.default()
 
     assert options.gridder.method == "xbatcher"
-    assert options.gridder.tile_size == (64, 64)
+    # The gridder starts unset; train_model sizes it automatically from the
+    # dataset/device (or set it explicitly with set_up_gridder_options).
+    assert options.gridder.tile_size is None
+    assert not options.gridder.is_resolved()
     assert options.fit.epochs == 50
     assert options.fit.batch_size == 16
     assert not options.data.is_resolved()

@@ -101,26 +101,48 @@ def _check_data_prepared(options):
 
 def _check_split(options):
     """Return problems if the train/validation split has not been resolved."""
-    if options.split.is_resolved():
+    split = options.split
+    if split.is_resolved():
         return []
+    has_train = bool(split.train_dates)
+    has_val = bool(split.val_dates)
+    if has_train != has_val:
+        # Partially set: one side has dates and the other does not.
+        missing = "val_dates" if has_train else "train_dates"
+        present = "train_dates" if has_train else "val_dates"
+        return [
+            f"options.split is partially set: {present} has dates but "
+            f"{missing} is empty. Both are needed. Re-run "
+            "mtg.set_up_train_split_options(ds, options) to choose them "
+            f"together, or set options.split.{missing} to match."
+        ]
     return [
         "options.split has no train/validation dates. They select which dates "
         "train the model and which validate it. Resolve them with "
-        "mtg.train_validation_dates(ds.time, options) (mode='train' also does "
-        "this automatically), or set options.split.train_dates / "
-        "options.split.val_dates manually with method='manual'."
+        "mtg.set_up_train_split_options(ds, options) (a random split over all "
+        "days; mode='train' also does this automatically), or set "
+        "options.split.train_dates / options.split.val_dates manually with "
+        "method='manual'."
     ]
 
 
 def _check_gridder(options):
-    """Return problems if the gridder method is unsupported."""
+    """Return problems if the gridder method is unsupported or unresolved."""
     if options.gridder.method != "xbatcher":
         return [
             f"options.gridder.method={options.gridder.method!r} is not "
             "supported; only 'xbatcher' is currently available. Set "
             "options.gridder = mtg.GridderOptions(method='xbatcher', "
-            "tile_size=(64, 64)) (or run mtg.set_up_gridder(ds, options) for a "
-            "memory-aware recommendation)."
+            "tile_size=(64, 64)) (or run mtg.set_up_gridder_options(ds, "
+            "options) for a memory-aware recommendation)."
+        ]
+    if not options.gridder.is_resolved():
+        return [
+            "options.gridder.tile_size is not set, so no spatial tiling has "
+            "been chosen. It is normally sized automatically during "
+            "ds_std = mtg.prepare_model_data(ds, options, mode='train'); run "
+            "that first, or set it explicitly with mtg.set_up_gridder_options"
+            "(ds, options) or options.gridder.tile_size = (64, 64) / 'full'."
         ]
     return []
 

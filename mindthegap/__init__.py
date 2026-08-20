@@ -1,10 +1,25 @@
 # Re-export the primary functions (explicit, stable API)
+
+
+def _resolve_version():
+    """Return the installed ``mindthegap`` version, or ``"unknown"``."""
+    try:
+        from importlib.metadata import version
+
+        return version("mindthegap")
+    except Exception:
+        return "unknown"
+
+
+__version__ = _resolve_version()
+
 from .data import (
     demo_data,
     crop_to_multiple,
     prepare_model_data,
     synthetic_cloud_cube,
     train_validation_dates,
+    set_up_train_split_options,
 )
 from .evaluation import (
     unstdize,
@@ -25,7 +40,7 @@ from .model_bundle import (
     save_model_bundle,
 )
 from .gridder import (
-    set_up_gridder,
+    set_up_gridder_options,
     GridderRecommendation,
 )
 from .validation import (
@@ -36,18 +51,22 @@ from .training import (
     train_model,
     TrainingResult,
 )
+from .session import set_up
 from .options import (
     Options,
     DataOptions,
     GridderOptions,
     FitOptions,
     SplitOptions,
+    CLOUD_MODE_OPTIONS,
+    cloud_options_for,
 )
 from . import cloud_bank
 # Expose the viz module as a submodule (lazy import by users)
 from . import viz  # users can do: from mindthegap import viz; viz.plot_prediction_observed(...)
 
 __all__ = [
+    "__version__",
     "demo_data",
     "crop_to_multiple",
     "unstdize",
@@ -60,23 +79,27 @@ __all__ = [
     "unet_spatial_multiple",
     "make_generator",
     "train_validation_dates",
+    "set_up_train_split_options",
     "fit_model",
     "gapfill_std",
     "UNet",
     "save_model_bundle",
     "load_model_bundle",
     "load_bundle_metrics",
-    "set_up_gridder",
+    "set_up_gridder_options",
     "GridderRecommendation",
     "validate_options",
     "OptionsValidationError",
     "train_model",
     "TrainingResult",
+    "set_up",
     "Options",
     "DataOptions",
     "GridderOptions",
     "FitOptions",
     "SplitOptions",
+    "CLOUD_MODE_OPTIONS",
+    "cloud_options_for",
     "cloud_bank",
     "viz",
 ]

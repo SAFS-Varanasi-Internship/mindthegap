@@ -65,7 +65,18 @@ def test_validate_split_requires_dates():
     options = Options.default(seed=1)
     with pytest.raises(OptionsValidationError) as excinfo:
         validate_options(options, requires=["split"])
-    assert "train_validation_dates" in str(excinfo.value)
+    assert "set_up_train_split_options" in str(excinfo.value)
+
+
+def test_validate_split_reports_partial_split():
+    options = Options.default(seed=1)
+    # train_dates set but val_dates empty: partially set and invalid.
+    options.split.train_dates = ["2000-01-01", "2000-01-02"]
+    with pytest.raises(OptionsValidationError) as excinfo:
+        validate_options(options, requires=["split"])
+    message = str(excinfo.value)
+    assert "partially set" in message
+    assert "val_dates" in message
 
 
 def test_validate_gridder_rejects_unsupported_method():

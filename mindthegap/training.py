@@ -94,12 +94,9 @@ class TrainingResult:
 
 def _package_version():
     """Return the installed ``mindthegap`` version, or ``"unknown"``."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    from . import __version__
 
-        return version("mindthegap")
-    except Exception:
-        return "unknown"
+    return __version__
 
 
 def _detect_device():
