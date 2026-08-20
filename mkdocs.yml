@@ -29,10 +29,20 @@ extra_css:
 nav:
 - Home: index.md
 - Installation: installation.md
+- Examples:
+  - Quick Start: examples/1-Quick_Start.ipynb
+  - Train a model: examples/2-Train.ipynb
+  - Gap-fill: examples/3-Gapfill.ipynb
 - API Reference: api.md
+
+not_in_nav: |
+  examples/make_dataset.py
 
 plugins:
 - search
+- mkdocs-jupyter:
+    include_source: true
+    execute: false
 - mkdocstrings:
     handlers:
       python:

@@ -21,3 +21,4 @@ assets/cloud_banks/*.nc
 # MkDocs build output
 site/
 build/
+.cache/
