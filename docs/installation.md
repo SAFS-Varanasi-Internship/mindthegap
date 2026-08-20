@@ -1,5 +1,11 @@
 # Installation
 
+Install from GitHub:
+
+```bash
+%pip install -qU "git+https://github.com/SAFS-Varanasi-Internship/mindthegap.git"
+```
+
 Install from source:
 
 ```bash
