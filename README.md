@@ -14,14 +14,11 @@ flowchart TB
         B1[BG1<br/>Split function:<br/>train / validation / test]
         B2[BG2<br/>Processing function:<br/>standardize, masks,<br/>time variables]
         B3[BG3<br/>Patch rules:<br/>size, overlap, variables]
-        B0[BG0<br/>Features:<br/>time, geo, env?]
         B4[BG4<br/>xbatcher<br/>batch generator]
 
-        B0 --> B4
         B1 --> B4
         B2 --> B4
         B3 --> B4
-
     end
 
     subgraph C[3. Generated batches]
@@ -62,57 +59,8 @@ flowchart TB
 ```
 
 Functions are in `mindthegap` directory. Notebooks are in the `book` directory.
-```python
+```
 import mindthegap as mtg
-```
-
-## Model Bundle Workflow
-
-To ensure reproducible gap-filling, we use **model bundles** that package trained models with all necessary metadata:
-
-```python
-# After training (see book/2-U-Net_Fit.ipynb)
-bundle = mtg.save_model_bundle(
-    model=model,
-    bundle_path="models/arabsea_2015",
-    stats=stats,
-    metadata={"region": "Arabian Sea", "train_year": 2015},
-    history=history
-)
-
-# Load from local path
-bundle = mtg.load_model_bundle("models/arabsea_2015")
-
-# Load from GitHub (use raw URLs)
-bundle = mtg.load_model_bundle(
-    "https://raw.githubusercontent.com/user/repo/main/models/arabsea_2015"
-)
-
-# Load from cloud storage (requires fsspec)
-bundle = mtg.load_model_bundle("gs://bucket/models/arabsea_2015")
-
-# Use the bundle
-model = bundle.model
-stats = bundle.stats
-```
-
-A bundle contains:
-- `model.keras` - Trained TensorFlow model
-- `stats.json` - Standardization statistics (mean, stdev)
-- `metadata.json` - Training configuration and provenance
-- `history.json` - Training history (optional)
-
-**For GitHub repositories**: Commit your bundle directory with all files. The load function will automatically download each file from the raw URL. Remote bundles are cached to `~/.cache/mindthegap/bundles` to avoid re-downloading.
-
-See `book/5-Model_Bundle_Example.ipynb` for complete examples.
-
-**CLI Tools:**
-```bash
-# List all model bundles
-python -m mindthegap.cli list models/
-
-# Show bundle information
-python -m mindthegap.cli info models/arabsea_2015
 ```
 
 ## Collaborators
