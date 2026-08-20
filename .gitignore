@@ -11,6 +11,7 @@ Untitled*
 
 __pycache__/
 .ipynb_checkpoints/
+book/.ipynb_checkpoints/
 
 models/
 # Cloud-bank binaries are distributed as GitHub Release assets, not tracked

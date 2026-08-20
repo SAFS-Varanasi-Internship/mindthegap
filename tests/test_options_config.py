@@ -1,5 +1,7 @@
+import pandas as pd
 import pytest
 
+import mindthegap as mtg
 from mindthegap import (
     FitOptions,
     GridderOptions,
@@ -13,7 +15,9 @@ from conftest import make_demo_ds
 def test_gridder_defaults_are_used_as_is():
     gridder = GridderOptions()
 
-    assert gridder.tile_size == (64, 64)
+    # tile_size defaults to unset (None); time_chunk keeps its default.
+    assert gridder.tile_size is None
+    assert not gridder.is_resolved()
     assert gridder.time_chunk == 100
 
 
@@ -141,6 +145,111 @@ def test_train_validation_dates_rejects_unknown_method():
         )
 
 
+def test_set_up_train_split_options_uses_all_days_by_default():
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+
+    result = mtg.set_up_train_split_options(ds, options, verbose=False)
+
+    split = options.split
+    assert result is options
+    assert split.method == "random"
+    assert split.is_resolved()
+    # n_days defaults to every date in ds.time and is recorded on the split.
+    assert split.n_days == ds.sizes["time"]
+    assert len(split.train_dates) == 48
+    assert len(split.val_dates) == 12
+    assert not (set(split.train_dates) & set(split.val_dates))
+
+
+def test_set_up_train_split_options_respects_explicit_n_days():
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+
+    mtg.set_up_train_split_options(
+        ds, options, split_options={"n_days": 30}, verbose=False
+    )
+
+    assert options.split.n_days == 30
+    assert len(options.split.train_dates) == 24
+    assert len(options.split.val_dates) == 6
+
+
+def test_set_up_train_split_options_accepts_manual_mode():
+    ds, metadata = make_demo_ds(days=120, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+    times = pd.to_datetime(ds.time.values)
+    train_slice = slice(str(times[0].date()), str(times[59].date()))
+    val_slice = slice(str(times[60].date()), str(times[-1].date()))
+
+    mtg.set_up_train_split_options(
+        ds,
+        options,
+        split_mode="manual",
+        split_options={"train_slice": train_slice, "val_slice": val_slice},
+        verbose=False,
+    )
+
+    assert options.split.method == "manual"
+    # n_days is not forced for a manual split.
+    assert options.split.n_days is None
+    assert options.split.is_resolved()
+
+
+def test_set_up_train_split_options_rejects_invalid_keys():
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+
+    # train_slice does not apply to the random mode.
+    with pytest.raises(ValueError, match="do not apply to split_mode='random'"):
+        mtg.set_up_train_split_options(
+            ds,
+            options,
+            split_options={"train_slice": slice("2010-01-01", "2010-02-01")},
+            verbose=False,
+        )
+
+
+def test_set_up_train_split_options_rejects_unknown_mode():
+    ds, metadata = make_demo_ds(days=60, lat_size=8, lon_size=8, seed=2)
+    options = Options.default(data=ds, metadata=metadata, seed=7)
+
+    with pytest.raises(ValueError, match="split_mode must be one of"):
+        mtg.set_up_train_split_options(ds, options, split_mode="bogus")
+
+
+def test_prepare_model_data_auto_runs_set_up_train_split_options():
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(
+        data=ds, metadata=metadata, smoke_test=True, seed=1
+    )
+    options.verbose = False
+
+    from mindthegap import prepare_model_data
+
+    prepare_model_data(ds, options, mode="train")
+
+    assert options.split.is_resolved()
+    assert options.split.method == "random"
+
+
+def test_prepare_model_data_errors_on_partial_split():
+    ds, metadata = make_demo_ds(days=40, lat_size=16, lon_size=16, seed=3)
+    options = Options.default(
+        data=ds, metadata=metadata, smoke_test=True, seed=1
+    )
+    options.verbose = False
+    # Only train_dates set, no val_dates: partially set and invalid.
+    options.split.train_dates = [
+        str(d.date()) for d in pd.to_datetime(ds.time.values[:5])
+    ]
+
+    from mindthegap import prepare_model_data, OptionsValidationError
+
+    with pytest.raises(OptionsValidationError, match="partially set"):
+        prepare_model_data(ds, options, mode="train")
+
+
 @pytest.mark.parametrize("n_days", [0, -1, 1.5, True])
 def test_split_rejects_invalid_n_days(n_days):
     with pytest.raises(ValueError, match="n_days must be a positive integer"):
@@ -151,7 +260,7 @@ def test_set_data_config_leaves_gridder_default_and_split_unresolved():
     ds, _ = make_demo_ds(days=120, lat_size=16, lon_size=16, seed=42)
     options = Options.default()
 
-    assert options.gridder.tile_size == (64, 64)
+    assert options.gridder.tile_size is None
     assert options.split.is_resolved() is False
 
 
@@ -168,8 +277,8 @@ def test_set_data_config_populates_data_from_metadata():
     assert options.data.missing_flag == "cloud_flag"
     assert options.data.land_flag == "land_flag"
     assert options.data.lat_bounds is not None
-    # set_data_config never touches the gridder; it stays at its default.
-    assert options.gridder.tile_size == (64, 64)
+    # set_data_config never touches the gridder; it stays unset.
+    assert options.gridder.tile_size is None
     assert options.split.is_resolved() is False
 
 
@@ -179,8 +288,8 @@ def test_default_with_data_leaves_gridder_at_default():
     options = Options.default(data=ds, metadata=metadata)
 
     assert options.data.target_variable == "chlor_a"
-    # The gridder is used exactly as configured -- no dataset-derived tiling.
-    assert options.gridder.tile_size == (64, 64)
+    # The gridder is left unset -- train_model sizes it automatically.
+    assert options.gridder.tile_size is None
 
 
 def test_default_smoke_test_uses_small_gridder():
@@ -195,6 +304,114 @@ def test_default_smoke_test_uses_small_gridder():
 
 def test_data_options_log_target_defaults_false():
     assert Options.default().data.log_target is False
+
+
+def test_set_up_data_options_cloud_mode_defaults_to_synthetic_bank():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    options.set_up_data_options(
+        ds, target="chlor_a", missing_flag="cloud_flag", land_flag="land_flag"
+    )
+
+    # cloud_mode is not a required argument; default is "synthetic_bank".
+    assert options.data.cloud_mode == "synthetic_bank"
+    assert options.data.cloud_coverage == 0.4
+
+
+def test_set_up_data_options_applies_cloud_options_dict():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    options.set_up_data_options(
+        ds,
+        target="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        cloud_options={
+            "cloud_coverage": 0.6,
+            "cloud_blob_sigma": 8.0,
+            "cloud_seed": 7,
+        },
+    )
+
+    assert options.data.cloud_coverage == 0.6
+    assert options.data.cloud_blob_sigma == 8.0
+    assert options.data.cloud_seed == 7
+
+
+def test_set_up_data_options_shift_mode_options():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    options.set_up_data_options(
+        ds,
+        target="chlor_a",
+        missing_flag="cloud_flag",
+        land_flag="land_flag",
+        cloud_mode="shift",
+        cloud_options={"missing_flag_shift": 5},
+    )
+
+    assert options.data.cloud_mode == "shift"
+    assert options.data.missing_flag_shift == 5
+
+
+def test_set_up_data_options_rejects_option_not_valid_for_mode():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    with pytest.raises(ValueError, match="do not apply to cloud_mode='shift'"):
+        options.set_up_data_options(
+            ds,
+            target="chlor_a",
+            missing_flag="cloud_flag",
+            land_flag="land_flag",
+            cloud_mode="shift",
+            cloud_options={"cloud_coverage": 0.5},
+        )
+
+
+def test_set_up_data_options_rejects_unknown_cloud_mode():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    with pytest.raises(ValueError, match="cloud_mode must be one of"):
+        options.set_up_data_options(
+            ds,
+            target="chlor_a",
+            missing_flag="cloud_flag",
+            land_flag="land_flag",
+            cloud_mode="bogus",
+        )
+
+
+def test_set_up_data_options_validates_cloud_option_values():
+    ds, _ = make_demo_ds(days=12, lat_size=8, lon_size=8, seed=1)
+    options = Options.default()
+
+    with pytest.raises(ValueError, match="cloud_coverage must be between"):
+        options.set_up_data_options(
+            ds,
+            target="chlor_a",
+            missing_flag="cloud_flag",
+            land_flag="land_flag",
+            cloud_options={"cloud_coverage": 1.5},
+        )
+
+
+def test_cloud_options_for_lists_valid_keys():
+    from mindthegap import cloud_options_for
+
+    assert cloud_options_for("synthetic_bank") == (
+        "cloud_coverage",
+        "cloud_blob_sigma",
+        "cloud_time_sigma",
+        "cloud_seed",
+    )
+    assert cloud_options_for("shift") == ("missing_flag_shift", "cloud_seed")
+    with pytest.raises(ValueError, match="cloud_mode must be one of"):
+        cloud_options_for("bogus")
 
 
 def test_prepare_model_data_reads_config_from_options():

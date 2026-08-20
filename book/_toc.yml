@@ -4,10 +4,8 @@
 format: jb-book
 root: intro
 chapters:
-- file: unet.md
   sections: 
-    - file: 1-U-Net_Data_Prep.ipynb
-    - file: 2-U-Net_Fit.ipynb
-    - file: 3-U-Net_Viz.ipynb
-- file: dincae.md
+    - file: 1-Quick-Start.ipynb
+    - file: 2-Train.ipynb
+    - file: 3-Gapfill.ipynb
 

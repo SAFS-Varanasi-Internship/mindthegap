@@ -1,4 +1,4 @@
-"""Tests for the memory-aware gridder recommendation (set_up_gridder)."""
+"""Tests for the memory-aware gridder recommendation (set_up_gridder_options)."""
 
 import pytest
 
@@ -9,7 +9,7 @@ from mindthegap.gridder import (
     estimate_tile_bytes,
     _choose_tile,
     _choose_time_chunk,
-    set_up_gridder,
+    set_up_gridder_options,
 )
 from mindthegap.model import unet_spatial_multiple
 from conftest import make_demo_ds
@@ -59,11 +59,13 @@ def test_predicted_channels_ds_probe_matches_static_and_is_pure():
     assert not options.data.standardization
 
 def test_set_up_gridder_reports_cropped_field_shape():
-    # set_up_gridder derives the field shape from prepare_model_data's dry-run
+    # set_up_gridder_options derives the field shape from prepare_model_data's dry-run
     # probe, which crops each axis to a multiple of the U-Net factor.
     ds, metadata = make_demo_ds(days=10, lat_size=100, lon_size=70, seed=1)
     options = _prepared_options(ds, metadata)
-    rec = set_up_gridder(ds, options, gpu_memory_gb=8.0, apply=False)
+    rec = set_up_gridder_options(
+        ds, options, gridder_options={"gpu_memory_gb": 8.0}, apply=False
+    )
     multiple = unet_spatial_multiple()
     lat, lon = rec.field_shape
     assert lat % multiple == 0
@@ -121,11 +123,32 @@ def test_choose_time_chunk_shrinks_under_ram_pressure():
     assert 1 <= chunk < 500
 
 
+def test_choose_time_chunk_targets_requested_frames():
+    # A target below the RAM/available limits is used directly.
+    chunk = _choose_time_chunk((64, 64), 9, 100e9, 1900, target_frames=500)
+    assert chunk == 500
+
+
+def test_choose_time_chunk_caps_target_at_ram_budget():
+    # A large target is still capped so a block fits in RAM.
+    capped = _choose_time_chunk((800, 1200), 9, 4e9, 2000, target_frames=1900)
+    uncapped = _choose_time_chunk((800, 1200), 9, 4e9, 2000)
+    assert capped == uncapped
+    assert capped < 1900
+
+
+def test_choose_time_chunk_caps_target_at_available_time():
+    chunk = _choose_time_chunk((64, 64), 9, 100e9, 40, target_frames=500)
+    assert chunk == 40
+
+
 def test_set_up_gridder_whole_field_no_overlap():
     ds, metadata = make_demo_ds(days=40, lat_size=96, lon_size=96, seed=3)
     options = _prepared_options(ds, metadata)
 
-    rec = set_up_gridder(ds, options, gpu_memory_gb=16.0, apply=False)
+    rec = set_up_gridder_options(
+        ds, options, gridder_options={"gpu_memory_gb": 16.0}, apply=False
+    )
 
     assert isinstance(rec, GridderRecommendation)
     assert rec.tile_size == (96, 96)
@@ -133,15 +156,17 @@ def test_set_up_gridder_whole_field_no_overlap():
     assert rec.overlap is None
     assert rec.batch_size == 8
     assert rec.n_channels == 9
-    # apply=False must not mutate options.
-    assert options.gridder.tile_size == (64, 64)
+    # apply=False must not mutate options (gridder stays unset).
+    assert options.gridder.tile_size is None
 
 
 def test_set_up_gridder_tiles_large_field_with_overlap():
     ds, metadata = make_demo_ds(days=40, lat_size=1000, lon_size=800, seed=3)
     options = _prepared_options(ds, metadata)
 
-    rec = set_up_gridder(ds, options, gpu_memory_gb=4.0, apply=False)
+    rec = set_up_gridder_options(
+        ds, options, gridder_options={"gpu_memory_gb": 4.0}, apply=False
+    )
 
     assert rec.n_tiles != (1, 1)
     assert rec.overlap == (16, 16)
@@ -152,7 +177,9 @@ def test_set_up_gridder_apply_true_mutates_options():
     ds, metadata = make_demo_ds(days=40, lat_size=1000, lon_size=800, seed=3)
     options = _prepared_options(ds, metadata)
 
-    rec = set_up_gridder(ds, options, gpu_memory_gb=4.0, apply=True)
+    rec = set_up_gridder_options(
+        ds, options, gridder_options={"gpu_memory_gb": 4.0}, apply=True
+    )
 
     assert options.gridder.tile_size == rec.tile_size
     assert options.gridder.time_chunk == rec.time_chunk
@@ -169,7 +196,9 @@ def test_set_up_gridder_refuses_when_min_tile_cannot_fit():
     options = _prepared_options(ds, metadata)
 
     with pytest.raises(RuntimeError, match="batch_size"):
-        set_up_gridder(ds, options, gpu_memory_gb=0.1, apply=False)
+        set_up_gridder_options(
+            ds, options, gridder_options={"gpu_memory_gb": 0.1}, apply=False
+        )
 
 
 def test_set_up_gridder_none_apply_defaults_to_no_apply_without_tty():
@@ -177,6 +206,32 @@ def test_set_up_gridder_none_apply_defaults_to_no_apply_without_tty():
     ds, metadata = make_demo_ds(days=40, lat_size=96, lon_size=96, seed=3)
     options = _prepared_options(ds, metadata)
 
-    set_up_gridder(ds, options, gpu_memory_gb=16.0, apply=None)
+    set_up_gridder_options(
+        ds, options, gridder_options={"gpu_memory_gb": 16.0}, apply=None
+    )
 
-    assert options.gridder.tile_size == (64, 64)
+    assert options.gridder.tile_size is None
+
+
+def test_set_up_gridder_rejects_unknown_gridder_options():
+    ds, metadata = make_demo_ds(days=40, lat_size=96, lon_size=96, seed=3)
+    options = _prepared_options(ds, metadata)
+
+    with pytest.raises(ValueError, match="not recognized"):
+        set_up_gridder_options(
+            ds, options, gridder_options={"bogus": 1}, apply=False
+        )
+
+
+def test_set_up_gridder_uses_split_n_days_for_time_chunk():
+    # When the split limits training to n_days, the time chunk targets that many
+    # frames (here well within the RAM budget) instead of all available frames.
+    ds, metadata = make_demo_ds(days=200, lat_size=96, lon_size=96, seed=3)
+    options = _prepared_options(ds, metadata)
+    options.split.n_days = 50
+
+    rec = set_up_gridder_options(
+        ds, options, gridder_options={"gpu_memory_gb": 16.0}, apply=False
+    )
+
+    assert rec.time_chunk == 50

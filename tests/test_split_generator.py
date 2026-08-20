@@ -103,7 +103,7 @@ def test_make_generator_requires_resolved_split():
     options.split.train_dates = []
     options.split.val_dates = []
 
-    with pytest.raises(ValueError, match="train_validation_dates"):
+    with pytest.raises(ValueError, match="set_up_train_split_options"):
         make_generator(ds_std, options=options)
 
 

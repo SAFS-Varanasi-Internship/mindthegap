@@ -205,9 +205,12 @@ def save_model_bundle(
         "history": result.history,
     }
 
-    # A saved bundle must carry the resolved channel order/standardization so it
-    # can be reloaded and reused; validate_options explains how to produce them.
-    validate_options(options, requires=["data_prepared"])
+    # A saved bundle is the product of a completed training run, so its options
+    # must be a fully valid training configuration: the resolved channel
+    # order/standardization (data_prepared) plus the split and gridder that
+    # training used. If any of these is missing the model was not produced by a
+    # normal train_model run; validate_options explains how to fix each one.
+    validate_options(options, requires=["data_prepared", "split", "gridder"])
 
     bundle_path = Path(path)
     model_path = bundle_path / MODEL_FILENAME

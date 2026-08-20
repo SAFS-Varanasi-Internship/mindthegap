@@ -682,9 +682,11 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
 
     In ``mode="train"``, if ``options.split`` has not been resolved yet, the
     train/validation dates are chosen automatically via
-    :func:`mindthegap.train_validation_dates` (reading the split method,
-    fractions, ``n_days``, and seed from ``options.split``); callers may still
-    call it explicitly beforehand for full control.
+    :func:`mindthegap.set_up_train_split_options` (a random split over all days
+    in ``ds``, using the method/fractions/seed on ``options.split``); callers may
+    still resolve the split explicitly beforehand for full control. A split that
+    is partially set but invalid is reported by the options validator rather
+    than silently overwritten.
 
     The spatial dimensions of ``ds`` are first cropped so their lengths are a
     multiple of the U-Net's downsampling factor (see
@@ -843,7 +845,7 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
     standardization statistics are **not** computed, synthetic clouds are **not**
     generated, the train/validation split is **not** resolved, and ``options``
     is **not** mutated. Use it to inspect ``ds_std.sizes`` / ``ds_std.data_vars``
-    (for example from :func:`mindthegap.set_up_gridder`) without paying for a
+    (for example from :func:`mindthegap.set_up_gridder_options`) without paying for a
     full preparation. ``mode`` still selects which flag channels are built.
     """
     from .options import Options as _Options
@@ -872,9 +874,15 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
     fit_dates = None
     if mode == "train" and not dry_run:
         if not full.split.is_resolved():
-            # Choose the train/validation dates from options.split (its method,
-            # fractions, n_days, seed) when the caller has not already done so.
-            train_validation_dates(ds["time"], full)
+            # A split that is partially set (e.g. train_dates but no val_dates)
+            # is a mistake, not "unset"; report it via the validator rather than
+            # silently overwriting it. A cleanly-unset split is auto-resolved.
+            if bool(full.split.train_dates) != bool(full.split.val_dates):
+                validate_options(full, requires=["split"])
+            # Choose the train/validation dates over all days in ds using the
+            # method/fractions/seed on options.split when the caller has not
+            # already done so.
+            set_up_train_split_options(ds, full)
         split_selection = full.split.train_selection()
         available = pd.DatetimeIndex(
             pd.to_datetime(np.asarray(ds["time"].values))
@@ -905,6 +913,16 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         ).unique()
         # Preserve chronological order to keep the time coordinate monotonic.
         fit_dates = fit_index.sort_values()
+
+        if not full.gridder.is_resolved():
+            # No tiling chosen yet: size the tile/time-chunk/batch to the
+            # dataset and device (and options.split.n_days) automatically, so
+            # the output chunking below and the training pipeline use a real,
+            # memory-aware gridder rather than an unset placeholder. Applied
+            # without prompting because train_model runs non-interactively.
+            from .gridder import set_up_gridder_options
+
+            set_up_gridder_options(ds, full, apply=True)
 
     if mode in ("test", "gapfill") and not dry_run and not full.data.standardization:
         raise OptionsValidationError(
@@ -1576,3 +1594,59 @@ def train_validation_dates(
         )
         print(f"Training period: {split.training_period()}")
     return full_options
+
+
+def set_up_train_split_options(
+    ds, options, *, split_mode=None, split_options=None, verbose=None
+):
+    """Resolve ``options.split`` for training and return ``options``.
+
+    This is the *optional* split set-up helper, mirroring
+    :meth:`mindthegap.Options.set_up_data_options`. The split configuration is
+    grouped rather than exposed as one keyword per parameter: ``split_mode``
+    selects the strategy and is *not* required (default
+    ``options.split.method`` -- ``"random"``); ``split_options`` is an optional
+    dict of only the parameters that apply to the chosen mode.
+
+    - ``split_mode="random"`` (default): a random split over *all* days in
+      ``ds`` (``options.split.n_days`` is set to the number of dates in
+      ``ds.time``) using the ``train_fraction`` / ``val_fraction`` / ``seed``
+      from ``options.split``. Valid ``split_options`` keys: ``n_days``,
+      ``train_fraction``, ``val_fraction``, ``n_train``, ``n_val``,
+      ``min_day_difference``, ``seed`` -- e.g. ``split_options={"n_days": 500}``.
+    - ``split_mode="manual"``: fixed windows via ``split_options={"train_slice":
+      slice("1997-01-01", "2000-01-01"), "val_slice": slice(...)}``. Valid
+      ``split_options`` keys: ``train_slice``, ``val_slice``, ``seed``.
+
+    Passing a key that does not apply to the chosen ``split_mode`` raises a
+    ``ValueError`` naming the valid keys; unset parameters keep their defaults.
+    See :data:`mindthegap.options.SPLIT_MODE_OPTIONS`.
+
+    Running it is not required: :func:`prepare_model_data` (``mode="train"``)
+    calls it automatically when ``options.split`` is unresolved, and errors via
+    the options validator when it is partially set but invalid. Returns
+    ``options`` for chaining.
+    """
+    from .options import split_options_for
+
+    resolved_mode = options.split.method if split_mode is None else split_mode
+    # Validates the mode and returns the keys that apply to it.
+    allowed = split_options_for(resolved_mode)
+
+    provided = dict(split_options or {})
+    unknown = [key for key in provided if key not in allowed]
+    if unknown:
+        raise ValueError(
+            f"split_options {sorted(unknown)} do not apply to "
+            f"split_mode={resolved_mode!r}; valid keys are {list(allowed)}."
+        )
+
+    # Default a random split to use every day in ds, recorded explicitly on
+    # options.split so the resolved configuration states how many days were
+    # available. An explicit n_days (or a manual mode) takes precedence.
+    if resolved_mode == "random" and provided.get("n_days") is None:
+        provided["n_days"] = int(ds["time"].sizes["time"])
+
+    return train_validation_dates(
+        ds["time"], options, method=resolved_mode, verbose=verbose, **provided
+    )
