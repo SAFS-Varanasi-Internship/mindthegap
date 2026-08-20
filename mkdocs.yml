@@ -1,0 +1,51 @@
+site_name: mindthegap
+site_description: Gap-filling functions for single- and multi-variable ocean color data
+repo_url: https://github.com/SAFS-Varanasi-Internship/mindthegap
+repo_name: SAFS-Varanasi-Internship/mindthegap
+
+theme:
+  name: material
+  palette:
+  - scheme: default
+    primary: blue
+    accent: light blue
+    toggle:
+      icon: material/brightness-7
+      name: Switch to dark mode
+  - scheme: slate
+    primary: blue
+    accent: light blue
+    toggle:
+      icon: material/brightness-4
+      name: Switch to light mode
+  features:
+  - navigation.sections
+  - navigation.expand
+  - content.code.copy
+
+extra_css:
+- stylesheets/extra.css
+
+nav:
+- Home: index.md
+- Installation: installation.md
+- API Reference: api.md
+
+plugins:
+- search
+- mkdocstrings:
+    handlers:
+      python:
+        options:
+          show_source: true
+          show_root_heading: true
+          show_signature_annotations: true
+          separate_signature: true
+
+markdown_extensions:
+- admonition
+- pymdownx.highlight:
+    anchor_linenums: true
+- pymdownx.superfences
+- pymdownx.tabbed:
+    alternate_style: true

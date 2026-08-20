@@ -17,3 +17,7 @@ models/
 # Cloud-bank binaries are distributed as GitHub Release assets, not tracked
 # in git. Regenerate with scripts/make_cloud_bank.py; upload with gh release.
 assets/cloud_banks/*.nc
+
+# MkDocs build output
+site/
+build/

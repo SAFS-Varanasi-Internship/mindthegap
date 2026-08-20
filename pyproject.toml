@@ -10,6 +10,16 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["PyYAML>=6.0", "scipy>=1.10"]
 
+[project.optional-dependencies]
+docs = [
+    "mkdocs>=1.5,<2.0",
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.24",
+]
+
+[project.urls]
+Repository = "https://github.com/SAFS-Varanasi-Internship/mindthegap"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["mindthegap*"]
