@@ -25,6 +25,7 @@ theme:
 
 extra_css:
 - stylesheets/extra.css
+- stylesheets/xarray.css
 
 nav:
 - Home: index.md

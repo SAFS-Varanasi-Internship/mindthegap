@@ -1,3 +1,21 @@
 .md-grid {
   max-width: 60rem;
 }
+
+/* Make xarray's HTML repr render sensibly inside Material for MkDocs.
+   xarray's stylesheet expects JupyterLab (--jp-*) variables that Material
+   does not define; pin readable defaults so the widget is not "awful". */
+.xr-wrap {
+  --xr-font-color0: var(--md-default-fg-color);
+  --xr-font-color2: var(--md-default-fg-color--light);
+  --xr-font-color3: var(--md-default-fg-color--lighter);
+  --xr-border-color: var(--md-default-fg-color--lightest);
+  --xr-disabled-color: var(--md-default-fg-color--lightest);
+  --xr-background-color: var(--md-default-bg-color);
+  --xr-background-color-row-even: var(--md-default-bg-color);
+  --xr-background-color-row-odd: var(--md-code-bg-color);
+  font-size: 0.75rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
