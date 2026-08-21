@@ -944,7 +944,22 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
     data_options = full.data
 
     # Everything below reads the resolved data configuration from options.data.
-    target_variable = data_options.target_variable
+    # target_variable = data_options.target_variable
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+    target_variables = list(data_options.target_variables) or [
+        data_options.target_variable
+    ]
+    target_variable = target_variables[0]
+    multi_target = len(target_variables) > 1
+
+    def _tname(prefix, variable):
+        """Channel name for one target: bare when single, suffixed when several.
+
+        Keeps the single-target channel names byte-identical to the previous
+        behaviour so existing configs, bundles, and notebooks keep working.
+        """
+        return f"{prefix}_{variable}" if multi_target else prefix
+    
     missing_flag = data_options.missing_flag
     land_flag = data_options.land_flag
     features = list(data_options.features or [])
@@ -972,14 +987,24 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
     n_temporal_lags = 1 if n_temporal_lags is None else n_temporal_lags
 
     features = list(features or [])
-    reserved_names = {
-        target_variable,
-        "full_target",
-        "observed_target",
-    }
-    for lag in range(1, (n_temporal_lags or 0) + 1):
-        reserved_names.add(f"observed_target_m{lag}")
-        reserved_names.add(f"observed_target_p{lag}")
+    # reserved_names = {
+    #     target_variable,
+    #     "full_target",
+    #     "observed_target",
+    # }
+    # for lag in range(1, (n_temporal_lags or 0) + 1):
+    #     reserved_names.add(f"observed_target_m{lag}")
+    #     reserved_names.add(f"observed_target_p{lag}")
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """ 
+    reserved_names = set(target_variables)
+    for variable in target_variables:
+        observed_name = _tname("observed_target", variable)
+        reserved_names.add(_tname("full_target", variable))
+        reserved_names.add(observed_name)
+        for lag in range(1, (n_temporal_lags or 0) + 1):
+            reserved_names.add(f"{observed_name}_m{lag}")
+            reserved_names.add(f"{observed_name}_p{lag}")
+    
     illegal_features = [name for name in features if name in reserved_names]
     if illegal_features:
         raise ValueError(
@@ -996,7 +1021,10 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
             "options.data.std_features must be a subset of "
             f"options.data.features; unknown: {unknown_std_features}"
         )
-    required = [target_variable, *features, missing_flag, land_flag]
+    # required = [target_variable, *features, missing_flag, land_flag]
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+    required = [*target_variables, *features, missing_flag, land_flag]
+    
     missing = [name for name in required if name not in ds]
     if missing:
         raise KeyError(f"Dataset is missing required variables: {missing}")
@@ -1048,15 +1076,29 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         }
         ds = ds.chunk(chunk_spec)
 
-    processed = ds[required].rename({target_variable: "full_target"})
+    # processed = ds[required].rename({target_variable: "full_target"})
+    # for flag in (missing_flag, land_flag):
+    #     processed[flag] = processed[flag].broadcast_like(
+    #         processed["full_target"]
+    #     )
+    # if log_target:
+    #     processed["full_target"] = np.log(
+    #         processed["full_target"].where(processed["full_target"] > 0)
+    #     )
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+    full_names = [_tname("full_target", v) for v in target_variables]
+    processed = ds[required].rename(
+        {v: name for v, name in zip(target_variables, full_names)}
+    )
     for flag in (missing_flag, land_flag):
         processed[flag] = processed[flag].broadcast_like(
-            processed["full_target"]
+            processed[full_names[0]]
         )
     if log_target:
-        processed["full_target"] = np.log(
-            processed["full_target"].where(processed["full_target"] > 0)
-        )
+        for name in full_names:
+            processed[name] = np.log(
+                processed[name].where(processed[name] > 0)
+            )
 
     processed["land_flag"] = (processed[land_flag] == 1).astype("int8")
     if make_synthetic:
@@ -1072,18 +1114,30 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         # and the pixel must not already carry another cloud type. Applying this
         # single mask to the synthetic clouds below guarantees each pixel has at
         # most one cloud flag (a real cloud always wins over a synthetic one).
-        eligible = (
-            (processed[missing_flag] == 0)
-            & (processed["land_flag"] == 0)
-            & processed["full_target"].notnull()
-        )
+        
+        # eligible = (
+        #     (processed[missing_flag] == 0)
+        #     & (processed["land_flag"] == 0)
+        #     & processed["full_target"].notnull()
+        # )
+        """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+        # A pixel may be hidden only where EVERY target has a real value, so
+        # all targets are scored on exactly the same pixels and one flag set
+        # describes all of them. The retrievals genuinely differ -- in an
+        # Arabian Sea test CHL had ~877k valid pixels against ~673k for the
+        # phytoplankton types on the same days -- so without this the flags
+        # would be wrong for whichever target has the sparser retrieval.
+        eligible = (processed[missing_flag] == 0) & (processed["land_flag"] == 0)
+        for name in full_names:
+            eligible = eligible & processed[name].notnull()
         bank_provenance = None
         if cloud_mode in ("synthetic_bank", "synthetic"):
             rng = np.random.default_rng(cloud_seed)
             n_t = processed.sizes["time"]
             n_la = processed.sizes["lat"]
             n_lo = processed.sizes["lon"]
-            time_chunk = processed["full_target"].chunksizes.get(
+            # time_chunk = processed["full_target"].chunksizes.get(
+            time_chunk = processed[full_names[0]].chunksizes.get(
                 "time", (n_t,)
             )[0]
 
@@ -1171,23 +1225,48 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         # land, on a real cloud (unavailable_flag), or on an already-missing
         # value. This guarantees estimate_flag and unavailable_flag never
         # overlap -- a pixel under a real cloud stays real, not synthetic.
+        
+        # estimate = estimate & eligible
+        # processed["estimate_flag"] = estimate.astype("int8")
+        # processed["observed_target"] = processed["full_target"].where(
+        #     ~estimate
+        # )
+        # processed["observed_flag"] = processed[
+        #     "observed_target"
+        # ].notnull().astype("int8")
+        """ CHNAGE TO MAKE IT MULTIVAR OUTPUT """
+        # One synthetic cloud field is shared by every target: a real cloud
+        # blocks all bands at once, so hiding different pixels per target would
+        # give the model information it would never have at inference time.
         estimate = estimate & eligible
         processed["estimate_flag"] = estimate.astype("int8")
-        processed["observed_target"] = processed["full_target"].where(
-            ~estimate
+        for name, full_name in zip(
+            [_tname("observed_target", v) for v in target_variables], full_names
+        ):
+            processed[name] = processed[full_name].where(~estimate)
+        processed["observed_flag"] = (
+            processed[_tname("observed_target", target_variables[0])]
+            .notnull()
+            .astype("int8")
         )
-        processed["observed_flag"] = processed[
-            "observed_target"
-        ].notnull().astype("int8")
+
     else:
         # Gap-filling: no synthetic clouds. The observed target is the real
         # observed data (missing values are already NaN and become 0 later). Real
         # clouds/NaNs over ocean are exactly the pixels the model should fill, so
         # they become estimate_flag=1; nothing is unavailable at inference time.
-        processed["observed_target"] = processed["full_target"]
-        processed["observed_flag"] = processed[
-            "full_target"
-        ].notnull().astype("int8")
+        
+        # processed["observed_target"] = processed["full_target"]
+        # processed["observed_flag"] = processed[
+        #     "full_target"
+        # ].notnull().astype("int8")
+        """ CHANGE TO MAKE IT MUSLTIVAR OUTPUT """
+        for variable, full_name in zip(target_variables, full_names):
+            processed[_tname("observed_target", variable)] = processed[full_name]
+        processed["observed_flag"] = (
+            processed[full_names[0]].notnull().astype("int8")
+        )
+        
         processed["estimate_flag"] = (
             (processed["observed_flag"] == 0)
             & (processed["land_flag"] == 0)
@@ -1197,10 +1276,16 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         )
 
     day_of_year = processed.time.dt.dayofyear
+    # spatial_template = xr.ones_like(
+    #     processed["full_target"].isel(time=0, drop=True),
+    #     dtype=np.float32,
+    # )
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
     spatial_template = xr.ones_like(
-        processed["full_target"].isel(time=0, drop=True),
+        processed[full_names[0]].isel(time=0, drop=True),
         dtype=np.float32,
     )
+
     processed["day_sin"] = (
         np.sin(2 * np.pi * day_of_year / 365.25).astype("float32")
         * spatial_template
@@ -1217,15 +1302,35 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
                 xr.ones_like(day_of_year).astype("float32") * with_geo[name]
             ).transpose("time", "lat", "lon")
 
-    target_group = ["full_target", "observed_target"]
-    lag_vars = []
-    for lag in range(1, n_temporal_lags + 1):
-        previous = f"observed_target_m{lag}"
-        following = f"observed_target_p{lag}"
-        processed[previous] = processed["observed_target"].shift(time=lag)
-        processed[following] = processed["observed_target"].shift(time=-lag)
-        lag_vars.extend([previous, following])
-    target_group.extend(lag_vars)
+    # target_group = ["full_target", "observed_target"]
+    # lag_vars = []
+    # for lag in range(1, n_temporal_lags + 1):
+    #     previous = f"observed_target_m{lag}"
+    #     following = f"observed_target_p{lag}"
+    #     processed[previous] = processed["observed_target"].shift(time=lag)
+    #     processed[following] = processed["observed_target"].shift(time=-lag)
+    #     lag_vars.extend([previous, following])
+    # target_group.extend(lag_vars)
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+    # Each target gets its own value channels, observed channels and lags.
+    # target_groups keeps them separate so standardization statistics are
+    # computed per target rather than pooled across variables on wildly
+    # different scales.
+    target_groups = {}
+    target_group = []
+    for variable, full_name in zip(target_variables, full_names):
+        observed_name = _tname("observed_target", variable)
+        group = [full_name, observed_name]
+        for lag in range(1, n_temporal_lags + 1):
+            previous = f"{observed_name}_m{lag}"
+            following = f"{observed_name}_p{lag}"
+            processed[previous] = processed[observed_name].shift(time=lag)
+            processed[following] = processed[observed_name].shift(time=-lag)
+            group.extend([previous, following])
+        target_groups[variable] = group
+        target_group.extend(group)
+
+        
     standardizable_vars = features + target_group
 
     means = {name: 0.0 for name in standardizable_vars}
@@ -1267,24 +1372,48 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         # observed_target over the training dates, then shared by the whole
         # target group (full_target, observed_target, and the temporal lags) so
         # the standardized inputs and the training label share one scale.
+        
+        # if std_target and not dry_run:
+        #     tgt_source = processed["observed_target"]
+        #     if train_dates is not None:
+        #         tgt_source = tgt_source.sel(time=train_dates)
+        #     tgt_mean = float(
+        #         tgt_source.mean(dim=("time", "lat", "lon"), skipna=True)
+        #         .compute()
+        #         .item()
+        #     )
+        #     tgt_std = float(
+        #         tgt_source.std(dim=("time", "lat", "lon"), skipna=True)
+        #         .compute()
+        #         .item()
+        #     )
+        #     for name in target_group:
+        #         means[name] = tgt_mean
+        #         standard_deviations[name] = tgt_std
+        #         applied_vars.append(name)
+        """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
         if std_target and not dry_run:
-            tgt_source = processed["observed_target"]
-            if train_dates is not None:
-                tgt_source = tgt_source.sel(time=train_dates)
-            tgt_mean = float(
-                tgt_source.mean(dim=("time", "lat", "lon"), skipna=True)
-                .compute()
-                .item()
-            )
-            tgt_std = float(
-                tgt_source.std(dim=("time", "lat", "lon"), skipna=True)
-                .compute()
-                .item()
-            )
-            for name in target_group:
-                means[name] = tgt_mean
-                standard_deviations[name] = tgt_std
-                applied_vars.append(name)
+            # Per-target statistics. Pooling them would let whichever target
+            # has the largest variance dominate the loss; each target is put on
+            # unit variance so a summed loss weights them comparably.
+            for variable in target_variables:
+                tgt_source = processed[_tname("observed_target", variable)]
+                if train_dates is not None:
+                    tgt_source = tgt_source.sel(time=train_dates)
+                tgt_mean = float(
+                    tgt_source.mean(dim=("time", "lat", "lon"), skipna=True)
+                    .compute()
+                    .item()
+                )
+                tgt_std = float(
+                    tgt_source.std(dim=("time", "lat", "lon"), skipna=True)
+                    .compute()
+                    .item()
+                )
+                for name in target_groups[variable]:
+                    means[name] = tgt_mean
+                    standard_deviations[name] = tgt_std
+                    applied_vars.append(name)
 
     std_vars = list(applied_vars)
     standardized = processed.copy()
@@ -1324,8 +1453,13 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
         return output
 
     if mode == "train":
-        input_names = [name for name in output_vars if name != "full_target"]
-        data_options.target = "full_target"
+        # input_names = [name for name in output_vars if name != "full_target"]
+        # data_options.target = "full_target"
+        """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+        input_names = [name for name in output_vars if name not in full_names]
+        data_options.targets = list(full_names)
+        data_options.target = full_names[0]
+        
         data_options.lat_bounds = (
             float(output["lat"].min()),
             float(output["lat"].max()),
@@ -1369,23 +1503,52 @@ def prepare_model_data(ds, options, mode, *, dry_run=False):
             }
             for name in standardizable_vars
         }
-        data_options.target_mean = float(means["full_target"])
-        data_options.target_std = float(standard_deviations["full_target"])
+        # data_options.target_mean = float(means["full_target"])
+        # data_options.target_std = float(standard_deviations["full_target"])
+        """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+        data_options.target_means = {
+            variable: float(means[_tname("full_target", variable)])
+            for variable in target_variables
+        }
+        data_options.target_stds = {
+            variable: float(
+                standard_deviations[_tname("full_target", variable)]
+            )
+            for variable in target_variables
+        }
+        # Singular fields keep the first target's statistics so existing
+        # readers and saved bundles continue to work.
+        data_options.target_mean = float(means[full_names[0]])
+        data_options.target_std = float(standard_deviations[full_names[0]])
+        
         data_options.missing_value_handling = (
             "Missing predictor values are replaced with zero after "
             "standardization; mask channels identify land and missing data."
         )
 
     if verbose:
-        input_names = [name for name in output_vars if name != "full_target"]
+        # input_names = [name for name in output_vars if name != "full_target"]
+        # print(f"Channels created ({len(input_names)} total):")
+        # for i, ch in enumerate(input_names, 1):
+        #     print(f"  {i}. {ch}")
+        # print(
+        #     "Target standardization: "
+        #     f"mean={means['full_target']:.4f}, "
+        #     f"std={standard_deviations['full_target']:.4f}"
+        # )
+        """ CHANGE TO MAKE IT MUTLIVAR OUTPUT """
+        input_names = [name for name in output_vars if name not in full_names]
         print(f"Channels created ({len(input_names)} total):")
         for i, ch in enumerate(input_names, 1):
             print(f"  {i}. {ch}")
-        print(
-            "Target standardization: "
-            f"mean={means['full_target']:.4f}, "
-            f"std={standard_deviations['full_target']:.4f}"
-        )
+        print(f"Targets ({len(full_names)}): {', '.join(full_names)}")
+        for variable, full_name in zip(target_variables, full_names):
+            print(
+                f"  {variable} standardization: "
+                f"mean={means[full_name]:.4f}, "
+                f"std={standard_deviations[full_name]:.4f}"
+            )
+            
         print(f"Dataset is LAZY (not in memory): {output.chunks}")
 
     return output
