@@ -17,6 +17,47 @@ DEMO_REGIONS = {
 }
 
 
+# EDIT: new opt-in local read cache (delete this EDIT comment when satisfied).
+def cache_locally(ds, path=None, *, overwrite=False, verbose=False):
+    """Optionally persist a (usually lazy) dataset to a local Zarr and reopen it.
+
+    Off by default. When ``path`` is given, the dataset is written to that Zarr
+    once and reopened from it, so later runs skip a slow remote read. This trades
+    local disk space for speed and is only worth it when space permits; for data
+    too large to fit on local disk, leave ``path=None`` and stream from the
+    source. (Some datasets may need a ``.chunk()`` before writing if their dask
+    chunks and stored encoding disagree.)
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Dataset to optionally cache (e.g. the output of :func:`demo_data`).
+    path : str or None, default None
+        Local Zarr path. ``None`` returns ``ds`` unchanged (no caching).
+    overwrite : bool, default False
+        Rewrite the local cache even if ``path`` already exists.
+    verbose : bool, default False
+        Print whether the cache was written or reused.
+
+    Returns
+    -------
+    xarray.Dataset
+        The dataset reopened from the local cache, or ``ds`` unchanged when
+        ``path`` is ``None``.
+    """
+    if path is None:
+        return ds
+    import os
+
+    if overwrite or not os.path.exists(path):
+        if verbose:
+            print(f"caching dataset to {path} (one-time; later runs reuse it)")
+        ds.to_zarr(path, mode="w")
+    elif verbose:
+        print(f"reusing cached dataset at {path}")
+    return xr.open_zarr(path)
+
+
 def _demo_data_call(
     *,
     dataset,

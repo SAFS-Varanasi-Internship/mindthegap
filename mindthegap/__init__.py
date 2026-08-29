@@ -15,6 +15,7 @@ __version__ = _resolve_version()
 
 from .data import (
     demo_data,
+    cache_locally,  # EDIT: export opt-in local read cache
     crop_to_multiple,
     prepare_model_data,
     synthetic_cloud_cube,
@@ -68,6 +69,7 @@ from . import viz  # users can do: from mindthegap import viz; viz.plot_predicti
 __all__ = [
     "__version__",
     "demo_data",
+    "cache_locally",  # EDIT: opt-in local read cache
     "crop_to_multiple",
     "unstdize",
     "compute_mae",

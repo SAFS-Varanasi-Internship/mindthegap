@@ -171,7 +171,9 @@ def _should_load_data(ds_std, load_data, verbose):
 
 
 def train_model(
-    ds, options, *, load_data="auto", callbacks=None, verbose=None
+    ds, options, *, load_data="auto", callbacks=None,
+    checkpoint_path=None,  # EDIT: opt-in mid-training checkpoint (forwarded to fit_model)
+    verbose=None,
 ):
     """Train a gap-filling model end to end and return a :class:`TrainingResult`.
 
@@ -213,6 +215,9 @@ def train_model(
     callbacks : list, optional
         Keras callbacks passed through to :func:`~mindthegap.fit_model`. When
         ``None`` the default EarlyStopping (on ``val_loss``) is used.
+    checkpoint_path : str, optional
+        If given, also save the best model to this path during training (a
+        ``ModelCheckpoint``), so a crash mid-fit keeps progress. Off by default.
     verbose : bool, optional
         Verbosity; defaults to ``options.verbose``.
 
@@ -266,6 +271,7 @@ def train_model(
         steps_per_epoch=train_steps,
         validation_steps=val_steps,
         callbacks=callbacks,
+        checkpoint_path=checkpoint_path,  # EDIT: forward opt-in checkpoint
         verbose=verbose,
     )
     history_dict = {key: list(values) for key, values in history.history.items()}

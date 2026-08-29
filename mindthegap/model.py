@@ -259,11 +259,14 @@ def UNet(input_shape, verbose=None, tile_size=None, input_names=None):
         filters[:-1][::-1],
         encoder_images[::-1][:-1],
     ):
-        x = layers.Conv2DTranspose(
+        # EDIT: resize-conv (bilinear upsample + conv) instead of Conv2DTranspose,
+        # which avoids the checkerboard artifact the transposed convolution makes.
+        x = layers.UpSampling2D(size=2, interpolation="bilinear")(x)
+        x = layers.Conv2D(
             number_filters,
-            3,
-            2,
+            (3, 3),
             padding="same",
+            activation="relu",
         )(x)
         x = layers.concatenate([x, encoder_image])
         x = layers.Conv2D(
@@ -280,11 +283,13 @@ def UNet(input_shape, verbose=None, tile_size=None, input_names=None):
         )(x)
         x = layers.BatchNormalization()(x)
 
-    x = layers.Conv2DTranspose(
+    # EDIT: resize-conv (bilinear upsample + conv), same as the decoder loop above.
+    x = layers.UpSampling2D(size=2, interpolation="bilinear")(x)
+    x = layers.Conv2D(
         number_filters,
-        3,
-        2,
+        (3, 3),
         padding="same",
+        activation="relu",
     )(x)
     x = layers.concatenate([x, encoder_images[0]])
     x = layers.Conv2D(
@@ -331,6 +336,7 @@ def fit_model(
     steps_per_epoch=None,
     validation_steps=None,
     callbacks=None,
+    checkpoint_path=None,  # EDIT: opt-in mid-training checkpoint (see docstring/below)
     verbose=None,
 ):
     """Fit a model using the training configuration on ``options``.
@@ -339,8 +345,9 @@ def fit_model(
     used, and ``options.verbose`` sets the default verbosity) or a
     :class:`FitOptions` section directly. It supplies epochs, batch size,
     learning rate, patience, loss, and optimizer so these choices are not
-    threaded individually through the pipeline. Returns the Keras ``History``
-    object.
+    threaded individually through the pipeline. Pass ``checkpoint_path`` to also
+    save the best model to disk during training, so a crash keeps progress.
+    Returns the Keras ``History`` object.
     """
     import tensorflow as tf
 
@@ -376,6 +383,17 @@ def fit_model(
                 monitor="val_loss",
                 patience=options.patience,
                 restore_best_weights=True,
+                verbose=verbose,
+            )
+        ]
+    # EDIT: checkpoint the best model to disk during training so a crash keeps
+    # progress. Opt-in via checkpoint_path; works alongside custom callbacks too.
+    if checkpoint_path is not None:
+        callbacks = list(callbacks) + [
+            tf.keras.callbacks.ModelCheckpoint(
+                checkpoint_path,
+                monitor="val_loss",
+                save_best_only=True,
                 verbose=verbose,
             )
         ]
