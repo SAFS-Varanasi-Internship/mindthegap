@@ -259,8 +259,8 @@ def UNet(input_shape, verbose=None, tile_size=None, input_names=None):
         filters[:-1][::-1],
         encoder_images[::-1][:-1],
     ):
-        # EDIT: resize-conv (bilinear upsample + conv) instead of Conv2DTranspose,
-        # which avoids the checkerboard artifact the transposed convolution makes.
+        # resize-conv (bilinear upsample + conv) instead of Conv2DTranspose,
+        # this avoids the checkerboard artifact the transposed convolution makes.
         x = layers.UpSampling2D(size=2, interpolation="bilinear")(x)
         x = layers.Conv2D(
             number_filters,
@@ -283,7 +283,7 @@ def UNet(input_shape, verbose=None, tile_size=None, input_names=None):
         )(x)
         x = layers.BatchNormalization()(x)
 
-    # EDIT: resize-conv (bilinear upsample + conv), same as the decoder loop above.
+    # resize-conv (bilinear upsample + conv), same as the decoder loop above.
     x = layers.UpSampling2D(size=2, interpolation="bilinear")(x)
     x = layers.Conv2D(
         number_filters,
@@ -336,7 +336,7 @@ def fit_model(
     steps_per_epoch=None,
     validation_steps=None,
     callbacks=None,
-    checkpoint_path=None,  # EDIT: opt-in mid-training checkpoint (see docstring/below)
+    checkpoint_path=None,  # opt-in mid-training checkpoint (see docstring/below)
     verbose=None,
 ):
     """Fit a model using the training configuration on ``options``.
@@ -386,7 +386,7 @@ def fit_model(
                 verbose=verbose,
             )
         ]
-    # EDIT: checkpoint the best model to disk during training so a crash keeps
+    # checkpoint the best model to disk during training so a crash keeps
     # progress. Opt-in via checkpoint_path; works alongside custom callbacks too.
     if checkpoint_path is not None:
         callbacks = list(callbacks) + [
