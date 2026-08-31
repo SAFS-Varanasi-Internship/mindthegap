@@ -17,7 +17,6 @@ DEMO_REGIONS = {
 }
 
 
-# EDIT: new opt-in local read cache (delete this EDIT comment when satisfied).
 def cache_locally(ds, path=None, *, overwrite=False, verbose=False):
     """Optionally persist a (usually lazy) dataset to a local Zarr and reopen it.
 
