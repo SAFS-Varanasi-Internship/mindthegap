@@ -1,0 +1,4 @@
+active_workspace: accelerator-2026-mindthegap
+
+provision:
+ install_conda: false

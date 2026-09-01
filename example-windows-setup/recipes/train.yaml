@@ -1,0 +1,40 @@
+# Training run: load PACE via Earthdata, train the mindthegap U-Net on a GPU, and
+# checkpoint + bundle to the HF bucket. Starts small (T4) as a validation of the
+# training chain; scale the GPU up (A10G / L40S) for the real whole-IO/year run.
+name: mindthegap-train
+
+resources:
+  # We only have quota in these regions currently:
+  infra: aws/us-west-2
+  # GPUs in order of increasing cost: T4, A10G, L40S, H100. T4 for the small region.
+  accelerators: T4:1
+  # T4 spot is available in us-west-2 and cheap; the Arabian Sea year fits in T4 RAM.
+  use_spot: true
+  # Be a good citizen and tear everything down when idle.
+  autostop:
+    idle_minutes: 30
+    down: true
+
+envs:
+  # Populated at launch via --env-file .env (see the remote-train task).
+  HF_TOKEN: ""
+  HF_BUCKET: ""
+  EARTHDATA_USERNAME: ""
+  EARTHDATA_PASSWORD: ""
+
+# NOTE: this directory is uploaded to the VM and is relative to where 'sky' is run
+workdir: ./
+
+# Install software dependencies.
+setup: |
+  curl -fsSL https://pixi.sh/install.sh | bash
+  source ~/.bashrc
+  # Conda science stack (tensorflow, xbatcher, earthaccess, scipy, ...) for runtime.
+  pixi install -e runtime
+  # mindthegap is a git/pip package (its heavy deps come from the conda env above),
+  # so install it into the runtime env after the conda solve.
+  pixi run -e runtime python -m pip install -q "git+https://github.com/SAFS-Varanasi-Internship/mindthegap.git"
+
+# Train, then sync the checkpoint + bundle to the bucket.
+run: |
+  pixi run -e runtime train-workflow

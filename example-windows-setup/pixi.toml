@@ -1,0 +1,80 @@
+[workspace]
+authors = ["Scott Henderson <3924836+scottyhq@users.noreply.github.com>"]
+channels = ["conda-forge"]
+name = "skypilot-accelerator-mindthegap"
+platforms = [{ platform = "linux-64", cuda = "12" }]  # linux-64 only (WSL client + Linux VMs); cuda enables the GPU tensorflow build
+version = "0.1.0"
+
+# Two environments on purpose:
+#   default  -- just the SkyPilot client, used HERE to submit jobs.
+#   runtime  -- the science stack + hf CLI, installed ON THE VM.
+# They are kept apart because skypilot pins click <8.2 while huggingface_hub
+# wants click >=8.4; sharing one env forces a solve where the `hf` CLI
+# crashes at exit. Splitting also means the VM never installs skypilot.
+
+[dependencies]
+skypilot = ">=0.13.0,<0.14"
+
+[feature.runtime.dependencies]
+icechunk = ">=2.1.2,<3"
+zarr = ">=3.3.0,<4"
+xarray = ">=2026.7.0,<2027"
+ipykernel = ">=7.3.0,<8"
+dask = ">=2026.7.1,<2027"
+obstore = ">=0.10.1,<0.12"
+matplotlib-base = ">=3.11.1,<4"
+huggingface_hub = ">=1.16.1,<2"
+tensorflow = { version = ">=2.16,<3", build = "cuda*" }  # GPU/CUDA build (needs the cuda system-requirement below; the CPU build ignored the T4)
+xbatcher = ">=0.3,<1"     # mindthegap streaming tiler (train)
+earthaccess = ">=0.15,<1" # PACE NASA Earthdata access (train)
+scipy = ">=1.10,<2"       # mindthegap core dependency
+pip = ">=24"              # to pip-install mindthegap into the runtime env
+cartopy = ">=0.22,<1"     # mindthegap.viz imports it at package import time
+
+# Runs load-env.sh on activation to export vars from a local .env (gitignored) into every task.
+# The script self-disables on a SkyPilot VM, where SkyPilot supplies the env
+# vars instead -- so the same tasks work locally and remotely. See load-env.sh.
+# Docs: https://pixi.sh/latest/reference/environment_variables/ and https://pixi.sh/latest/reference/pixi_manifest/#the-activation-table
+# This table belongs to the *default* feature, so it must be repeated for runtime
+# below -- no-default-feature = true means runtime inherits nothing from default.
+[activation]
+scripts = ["load-env.sh"]
+
+[feature.runtime.activation]
+scripts = ["load-env.sh"]
+
+[environments]
+# no-default-feature is essential: without it pixi folds the default feature
+# (skypilot) into this env too, dragging the click <8.2 cap back in.
+runtime = { features = ["runtime"], no-default-feature = true }
+
+# Launch tasks -- run locally in the default (skypilot) env.
+[tasks]
+login='sky api login -e "https://$SKYPILOT_API_USER:$SKYPILOT_API_PASSWORD@$SKYPILOT_API_ENDPOINT"'
+check='sky check -w accelerator-2026-mindthegap'
+test='sky jobs launch -n demo-test --cpus 1+ -- echo hello'
+test-T4='sky jobs launch -n testT4 --infra aws --gpus T4:1 -- nvidia-smi'
+test-A10='sky jobs launch -n testA10 --infra aws --gpus A10G:1 -- nvidia-smi'
+test-L40='sky jobs launch -n testL40 --infra aws --gpus L40S:1 -- nvidia-smi'
+test-H100='sky jobs launch -n testH100 --infra aws --gpus H100:1 -- nvidia-smi'
+# NOTE: this just *calls* local workflow on a remote VM!
+remote-workflow='sky jobs launch recipes/example.yaml --env-file .env'
+# Prediction-only variant (CPU): download a model from HF, predict, sync the PNG.
+remote-predict='sky jobs launch recipes/predict.yaml --env-file .env'
+# Training variant (GPU): load PACE via Earthdata, train, checkpoint + bundle to bucket.
+remote-train='sky jobs launch recipes/train.yaml --env-file .env'
+
+# Compute tasks -- run in the runtime env, on the VM or locally with -e runtime.
+[feature.runtime.tasks]
+example='python recipes/example.py'
+# NOTE: guard is inverted (-z, skip-first) on purpose: that way a real
+# `hf` failure propagates as a non-zero exit instead of being swallowed
+# by the `||` and misreported as "token not set".
+sync-outputs='test -z "$HF_TOKEN" && echo "HF_TOKEN not set -- skipping upload; outputs are local only and are lost when the VM tears down" || hf buckets sync outputs $HF_BUCKET/outputs'
+local-workflow={ depends-on=['example', 'sync-outputs'] }
+# Prediction smoke test: run predict.py, then sync outputs to the bucket.
+predict='python recipes/predict.py'
+predict-workflow={ depends-on=['predict', 'sync-outputs'] }
+# Training: run train.py (loads PACE, trains, checkpoints to outputs/), then sync.
+train='python recipes/train.py'
+train-workflow={ depends-on=['train', 'sync-outputs'] }

@@ -1,0 +1,48 @@
+# A real-world workflow usually needs to
+# handle input and output data!
+# for this demo we illustrate using a cloud
+# storage bucket for inputs and outputs.
+name: mindthegap-example
+
+resources:
+  # We only have quota in these regions currently:
+  infra: aws/us-west-2
+  #infra: aws/us-east-2
+  #infra: aws/us-east-1
+  # If you're just testing a workflow setup (dependencies, inputs/outputs, best to just use CPUs)
+  cpus: 4
+  # GPUs in order of increasing cost: T4, A10, L40, H100
+  #gpus: T4:1
+  #gpus: A10G:1
+  #gpus: L40S:1
+  #gpus: H100:1
+  # fraction of the cost, but disable this for long-running jobs
+  use_spot: true
+  # Be a good citizen and make sure to tear down everything
+  autostop:
+    idle_minutes: 30
+    down: true
+
+envs:
+  # optional: sky launch --env HF_TOKEN=hf_xxx to enable syncing outputs
+  HF_TOKEN: ""
+  HF_BUCKET: ""
+
+# NOTE: this directory is uploaded to the VM and is relative where 'sky' is run
+workdir: ./
+
+# Install software dependencies
+setup: |
+  curl -fsSL https://pixi.sh/install.sh | bash
+  source ~/.bashrc
+  # -e runtime: the science stack + hf CLI only. The VM has no reason to
+  # install the skypilot client, and leaving it out is what lets this env
+  # resolve a working `hf` (see the comments in pixi.toml).
+  pixi install -e runtime
+
+# Run scripts and handle outputs
+# Here we put an output figure into a hugging face bucket
+run: |
+  # The whole pipeline is a task in pixi.toml, so the same one-liner
+  # reproduces this run locally. See [feature.runtime.tasks] there.
+  pixi run -e runtime local-workflow

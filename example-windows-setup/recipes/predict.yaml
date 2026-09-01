@@ -1,0 +1,34 @@
+# Prediction-only run: download a pretrained model from Hugging Face and save a
+# prediction PNG to the bucket. CPU only and cheap -- a smoke test for the whole
+# chain before spending on a GPU training run. Mirrors example.yaml.
+name: mindthegap-predict
+
+resources:
+  # We only have quota in these regions currently:
+  infra: aws/us-west-2
+  # Prediction is light: CPU is plenty and far cheaper than a GPU.
+  cpus: 4
+  # fraction of the cost; fine for a short job
+  use_spot: true
+  # Be a good citizen and tear everything down when idle.
+  autostop:
+    idle_minutes: 30
+    down: true
+
+envs:
+  # Populated at launch via --env-file .env (see the remote-predict task).
+  HF_TOKEN: ""
+  HF_BUCKET: ""
+
+# NOTE: this directory is uploaded to the VM and is relative to where 'sky' is run
+workdir: ./
+
+# Install software dependencies (runtime env: science stack + hf CLI + tensorflow)
+setup: |
+  curl -fsSL https://pixi.sh/install.sh | bash
+  source ~/.bashrc
+  pixi install -e runtime
+
+# Download the model, predict, and sync the output PNG to the bucket.
+run: |
+  pixi run -e runtime predict-workflow
