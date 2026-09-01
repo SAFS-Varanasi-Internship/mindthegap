@@ -20,6 +20,7 @@ package::
 from dataclasses import dataclass, field
 from typing import Any, Optional
 import datetime
+import os  # EDIT (item 2): checkpoint existence check for resume
 
 from .data import prepare_model_data
 from .model import make_generator, UNet, fit_model
@@ -173,6 +174,9 @@ def _should_load_data(ds_std, load_data, verbose):
 def train_model(
     ds, options, *, load_data="auto", callbacks=None,
     checkpoint_path=None,  # EDIT: opt-in mid-training checkpoint (forwarded to fit_model)
+    resume_from=None,      # EDIT (item 2): path to a checkpoint to resume from (None = fresh)
+    initial_epoch=0,       # EDIT (item 2): epoch to resume at (0 = from scratch)
+    extra_callbacks=None,  # EDIT (item 2): callbacks appended to the defaults (e.g. bucket sync)
     verbose=None,
 ):
     """Train a gap-filling model end to end and return a :class:`TrainingResult`.
@@ -255,14 +259,31 @@ def train_model(
 
     # 3. Model: channel count comes from the resolved configuration.
     n_channels = len(options.data.input_names)
-    model = UNet(
-        (None, None, n_channels),
-        verbose=verbose,
-        tile_size=options.gridder.tile_size,
-        input_names=options.data.input_names,
-    )
+    # EDIT (item 2): resume from a saved checkpoint instead of a fresh model when
+    # resume_from points at an existing file. Import mindthegap.losses first so the
+    # custom masked loss/metrics deserialize, and load with compile=True so the
+    # optimizer state resumes too. `resumed` -> skip the re-compile in fit_model.
+    resumed = False
+    if resume_from is not None and os.path.exists(resume_from):
+        import keras
+        from . import losses as _losses  # noqa: F401  (registers custom objects)
 
-    # 4. Fit (fit_model compiles with options.fit + metrics=["mae"]).
+        if verbose:
+            print(
+                f"Resuming from checkpoint {resume_from} at epoch {initial_epoch}"
+            )
+        model = keras.models.load_model(resume_from)
+        model.jit_compile = False  # cuDNN reliability (see load_model_bundle)
+        resumed = True
+    else:
+        model = UNet(
+            (None, None, n_channels),
+            verbose=verbose,
+            tile_size=options.gridder.tile_size,
+            input_names=options.data.input_names,
+        )
+
+    # 4. Fit (fit_model compiles with the masked loss + fake-cloud metrics).
     history = fit_model(
         model,
         train_dataset,
@@ -272,6 +293,9 @@ def train_model(
         validation_steps=val_steps,
         callbacks=callbacks,
         checkpoint_path=checkpoint_path,  # EDIT: forward opt-in checkpoint
+        initial_epoch=initial_epoch,      # EDIT (item 2): resume epoch
+        extra_callbacks=extra_callbacks,  # EDIT (item 2): appended callbacks (bucket sync)
+        recompile=not resumed,            # EDIT (item 2): keep a resumed model's optimizer
         verbose=verbose,
     )
     history_dict = {key: list(values) for key, values in history.history.items()}

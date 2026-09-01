@@ -353,6 +353,9 @@ def fit_model(
     validation_steps=None,
     callbacks=None,
     checkpoint_path=None,  # opt-in mid-training checkpoint (see docstring/below)
+    initial_epoch=0,       # EDIT (item 2): resume from this epoch (0 = from scratch)
+    extra_callbacks=None,  # EDIT (item 2): callbacks appended to the defaults
+    recompile=True,        # EDIT (item 2): False keeps a resumed model's optimizer
     verbose=None,
 ):
     """Fit a model using the training configuration on ``options``.
@@ -390,14 +393,16 @@ def fit_model(
     # superseded by this masked objective.
     from .losses import masked_mse, fakecloud_mse, fakecloud_mae
 
-    model.compile(
-        optimizer=optimizers[options.optimizer](
-            learning_rate=options.learning_rate
-        ),
-        loss=masked_mse,
-        metrics=[fakecloud_mse, fakecloud_mae],
-        jit_compile=False,
-    )
+    # EDIT (item 2): skip recompiling a resumed model so its optimizer state is kept.
+    if recompile:
+        model.compile(
+            optimizer=optimizers[options.optimizer](
+                learning_rate=options.learning_rate
+            ),
+            loss=masked_mse,
+            metrics=[fakecloud_mse, fakecloud_mae],
+            jit_compile=False,
+        )
 
     if callbacks is None:
         callbacks = [
@@ -419,6 +424,10 @@ def fit_model(
                 verbose=verbose,
             )
         ]
+    # EDIT (item 2): append extra callbacks (e.g. a callback that syncs the
+    # checkpoint to the HF bucket each epoch so a preemption can be resumed).
+    if extra_callbacks:
+        callbacks = list(callbacks) + list(extra_callbacks)
 
     if verbose:
         print(
@@ -434,6 +443,7 @@ def fit_model(
         validation_data=validation_data,
         validation_steps=validation_steps,
         callbacks=callbacks,
+        initial_epoch=initial_epoch,  # EDIT (item 2): resume from this epoch
         verbose=verbose,
     )
 
