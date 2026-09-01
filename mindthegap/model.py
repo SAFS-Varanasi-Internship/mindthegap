@@ -65,27 +65,42 @@ def unet_spatial_multiple(build_fn=None):
     return factor if factor > 1 else 2 ** UNET_DEPTH
 
 
-def make_tf_gen(batcher, x_vars, label="full_target"):
-    """Create a TensorFlow generator from standardized xbatcher blocks."""
+def make_tf_gen(
+    batcher,
+    x_vars,
+    label="full_target",
+    observed_flag="observed_flag",  # EDIT (item 1): used to build the mask channels
+    estimate_flag="estimate_flag",
+):
+    """Create a TensorFlow generator from standardized xbatcher blocks.
+
+    EDIT (item 1): the target is 3 channels, ``[value, train_mask, estimate_mask]``:
+    ``value`` = ``label`` (full_target); ``train_mask`` = observed_flag OR
+    estimate_flag (pixels the training loss scores: observed + synthetic-cloud);
+    ``estimate_mask`` = estimate_flag (synthetic clouds only, scored in eval). See
+    ``mindthegap.losses``.
+    """
+
+    def _frame(batch, var, time_index):
+        return np.nan_to_num(
+            batch[var].isel(time=time_index).values, nan=0.0
+        ).astype(np.float32)
 
     def gen():
         for batch in batcher:
             batch = batch.load()
             for time_index in range(batch.sizes["time"]):
                 x = np.stack(
-                    [
-                        np.nan_to_num(
-                            batch[var].isel(time=time_index).values,
-                            nan=0.0,
-                        )
-                        for var in x_vars
-                    ],
+                    [_frame(batch, var, time_index) for var in x_vars],
                     axis=-1,
                 ).astype(np.float32)
-                y = np.nan_to_num(
-                    batch[label].isel(time=time_index).values,
-                    nan=0.0,
-                ).astype(np.float32)[..., np.newaxis]
+                value = _frame(batch, label, time_index)
+                observed = _frame(batch, observed_flag, time_index)
+                estimate = _frame(batch, estimate_flag, time_index)
+                train_mask = np.clip(observed + estimate, 0.0, 1.0)
+                y = np.stack(
+                    [value, train_mask, estimate], axis=-1
+                ).astype(np.float32)
                 yield x, y
 
     return gen
@@ -163,7 +178,8 @@ def make_generator(ds_std, options, *, verbose=None):
         tf.TensorSpec(
             shape=(tile_lat, tile_lon, num_channels), dtype=tf.float32
         ),
-        tf.TensorSpec(shape=(tile_lat, tile_lon, 1), dtype=tf.float32),
+        # EDIT (item 1): target is 3 channels [value, train_mask, estimate_mask]
+        tf.TensorSpec(shape=(tile_lat, tile_lon, 3), dtype=tf.float32),
     )
 
     train_dataset = (
@@ -368,12 +384,18 @@ def fit_model(
             f"Unsupported optimizer {options.optimizer!r}; "
             f"choose from: {', '.join(optimizers)}"
         )
+    # EDIT (item 1): masked training loss scores observed + synthetic-cloud pixels
+    # (not real clouds or land), and the metrics score the synthetic clouds only
+    # (held-out gap-fill skill). See mindthegap.losses. options.loss ("mse") is
+    # superseded by this masked objective.
+    from .losses import masked_mse, fakecloud_mse, fakecloud_mae
+
     model.compile(
         optimizer=optimizers[options.optimizer](
             learning_rate=options.learning_rate
         ),
-        loss=options.loss,
-        metrics=["mae"],
+        loss=masked_mse,
+        metrics=[fakecloud_mse, fakecloud_mae],
         jit_compile=False,
     )
 
