@@ -1,17 +1,5 @@
 # macOS setup for the PACE gap-fill smoke test
 
-A start-to-finish smoke test for a Mac: set up the tools and accounts, run a
-short training job on a GPU in the cloud, and confirm it learned by looking at
-the gap-fill evaluation it writes to your bucket. It is deliberately small (about
-10 to 15 minutes and a few cents); the point is to prove the whole chain works,
-not to train a good model.
-
-The pixi environment in this repo is `linux-64` only, so on a Mac you set up the
-SkyPilot client and the Hugging Face CLI directly with pip instead of pixi.
-Nothing about the training changes: it still runs on a Linux GPU VM in the cloud,
-which builds its own environment. You are only replacing the local `pixi run ...`
-wrappers with the raw `sky ...` and `hf ...` commands they call.
-
 **Validation note.** This exact command flow (install, login, `sky check`,
 `sky jobs queue`, `hf buckets ls` and `cp`) was tested on Linux, where `sky` and
 `hf` are the same CLIs as on macOS, and it worked. The macOS-specific pieces
@@ -32,7 +20,7 @@ anything differs.
   a bucket path like `hf://buckets/<user>/<name>`.
 - **NASA Earthdata**: create an account at https://urs.earthdata.nasa.gov. This
   is what lets the training VM read PACE data.
-- **SkyPilot controller (eScience CloudBank)**: ask Scott for a login to the
+- **SkyPilot controller (eScience CloudBank)**: Scott sent an email with a login to the
   shared controller. That login is what gives you cloud compute; you do not need
   your own AWS account, and the controller already has the AWS quota. You will
   get an endpoint, a username, and a password.
