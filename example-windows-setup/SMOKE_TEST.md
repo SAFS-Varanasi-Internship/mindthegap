@@ -6,10 +6,9 @@ looking at the built-in gap-fill evaluation it writes to your bucket. It is
 deliberately small (about 10 to 15 minutes and a few cents), so the point is to
 prove the whole chain works, not to train a good model.
 
-Instructions are given for both macOS and Windows. Where a step differs, the
-macOS line comes first and the Windows line second. Every `pixi run ...` command
-is identical on both; only the shell differs (macOS runs them in Terminal,
-Windows runs them inside a WSL Ubuntu terminal).
+These steps are for Windows (via WSL) and Linux, where the pixi client
+environment installs cleanly. macOS needs a different client setup for now; see
+the note at the end.
 
 For how the pipeline was built and its failure modes, see [README.md](README.md).
 For day-to-day operation (resume, monitoring, all the knobs), see
@@ -36,17 +35,18 @@ For day-to-day operation (resume, monitoring, all the knobs), see
 ### Tools
 
 - **Windows only, first**: install WSL, then do everything below inside the WSL
-  Ubuntu terminal (not PowerShell).
-  - Windows: open PowerShell as admin, run `wsl --install`, reboot, and finish the
-    Ubuntu first-run setup. From then on, open "Ubuntu" and work there.
-  - macOS: nothing extra; use Terminal.
-- **pixi** (both platforms), then restart the shell:
-  - macOS: `curl -fsSL https://pixi.sh/install.sh | bash`
-  - Windows (in WSL): `curl -fsSL https://pixi.sh/install.sh | bash`
+  Ubuntu terminal (not PowerShell). Open PowerShell as admin, run `wsl --install`,
+  reboot, and finish the Ubuntu first-run setup. From then on, open "Ubuntu" and
+  work there. (Linux users: just use your terminal.)
+- **pixi**, then restart the shell:
+  ```
+  curl -fsSL https://pixi.sh/install.sh | bash
+  ```
 - **The repo**:
-  - macOS: `git clone https://github.com/SAFS-Varanasi-Internship/mindthegap.git`
-  - Windows (in WSL): `git clone https://github.com/SAFS-Varanasi-Internship/mindthegap.git`
-  - Then, both: `cd mindthegap/example-windows-setup`
+  ```
+  git clone https://github.com/SAFS-Varanasi-Internship/mindthegap.git
+  cd mindthegap/example-windows-setup
+  ```
 
 ### Credentials file
 
@@ -66,7 +66,7 @@ gitignored; never commit it.
 ## 2. Verify the setup
 
 Log the SkyPilot client into the controller, then confirm it can see cloud
-compute. Same commands on both platforms (macOS in Terminal, Windows in WSL):
+compute:
 
 ```
 pixi run login
@@ -84,10 +84,6 @@ This submits a tiny CPU job that just echoes "hello" and tears itself down. When
 it reports SUCCEEDED, your access works. If it sits in `PENDING`, see the
 spot-capacity note in the README.
 
-Note: pixi prints a one-line deprecation warning about `[system-requirements]`
-when it reads the manifest. It is harmless; the environment still builds
-correctly.
-
 --------------------------------------------------------------------------------
 
 ## 3. Run the training smoke test
@@ -100,7 +96,7 @@ TIME_SLICE = slice("2024-06-01", "2024-07-01")  # one month, quick
 EPOCHS = 3                                       # a few epochs, enough to see it learn
 ```
 
-Then launch it (same on both platforms):
+Then launch it:
 
 ```
 pixi run remote-train -y
@@ -137,16 +133,35 @@ pixi run sky jobs logs <job-id>     # read the epoch-by-epoch metrics
 files that put the observed field next to the model's full-region gap-filled
 field. For a smoke test, "the two panels broadly resemble each other and the
 fill is smooth" is a pass; do not expect a polished model from three epochs. List
-and pull them (same on both platforms):
+and pull them:
 
 ```
 pixi run -e runtime hf buckets ls <user>/<name>/outputs
 pixi run -e runtime hf buckets cp hf://buckets/<user>/<name>/outputs/gapfill_2024-06-15.png ./gapfill.png
 ```
 
-Open the downloaded PNG (macOS: `open gapfill.png`; Windows in WSL:
-`explorer.exe gapfill.png`).
+Open the downloaded PNG (Windows in WSL: `explorer.exe gapfill.png`; Linux:
+`xdg-open gapfill.png`).
 
 If the metric fell and the graphs look sensible, the whole chain works:
 accounts, client, controller, GPU VM, PACE read, training, evaluation, and the
 bucket sync.
+
+--------------------------------------------------------------------------------
+
+## Note on macOS
+
+The pixi manifest currently targets `linux-64` only, so `pixi install` will not
+run natively on a Mac. Making the client environment cross-platform ran into a
+pixi conflict on GPU dev machines (declaring the CUDA runtime makes the plain
+client environment stop matching a CUDA host), so it was reverted rather than
+ship something broken. Two interim options for a Mac user:
+
+- Run the client from any Linux machine or a Linux VM, following the steps above.
+- Install just the SkyPilot client and the `hf` CLI yourself (for example
+  `pip install "skypilot[aws]" huggingface_hub` in a virtualenv), load `.env`
+  into your shell, and use the raw `sky ...` and `hf ...` commands that the pixi
+  tasks wrap (see `pixi.toml` for the exact command each task runs). This path is
+  not yet tested here.
+
+A properly tested macOS setup is a follow-up.
