@@ -151,17 +151,8 @@ bucket sync.
 
 ## Note on macOS
 
-The pixi manifest currently targets `linux-64` only, so `pixi install` will not
-run natively on a Mac. Making the client environment cross-platform ran into a
-pixi conflict on GPU dev machines (declaring the CUDA runtime makes the plain
-client environment stop matching a CUDA host), so it was reverted rather than
-ship something broken. Two interim options for a Mac user:
-
-- Run the client from any Linux machine or a Linux VM, following the steps above.
-- Install just the SkyPilot client and the `hf` CLI yourself (for example
-  `pip install "skypilot[aws]" huggingface_hub` in a virtualenv), load `.env`
-  into your shell, and use the raw `sky ...` and `hf ...` commands that the pixi
-  tasks wrap (see `pixi.toml` for the exact command each task runs). This path is
-  not yet tested here.
-
-A properly tested macOS setup is a follow-up.
+The pixi manifest targets `linux-64` only, so `pixi install` does not run
+natively on a Mac. macOS users follow [MAC_SETUP.md](MAC_SETUP.md) instead: it
+sets up the SkyPilot client and the Hugging Face CLI with pip (two small venvs)
+and uses the raw `sky` and `hf` commands these pixi tasks wrap. The training
+itself is identical; only the local client differs.
