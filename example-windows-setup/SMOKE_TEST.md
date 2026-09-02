@@ -17,7 +17,7 @@ For day-to-day operation (resume, monitoring, all the knobs), see
 
 --------------------------------------------------------------------------------
 
-## 1. Prerequisites (do these once)
+## 1. Prerequisites 
 
 ### Accounts
 
@@ -28,7 +28,7 @@ For day-to-day operation (resume, monitoring, all the knobs), see
   path like `hf://buckets/<user>/<name>`.
 - **NASA Earthdata**: create an account at https://urs.earthdata.nasa.gov. This
   is what lets the training VM read PACE data.
-- **SkyPilot controller (eScience CloudBank)**: ask Scott for a login to the
+- **SkyPilot controller (eScience CloudBank)**: Scott sent a login to the
   shared controller. That login is what gives you cloud compute; you do not need
   your own AWS account, and the controller already has the AWS quota. You will
   get an endpoint, a username, and a password.
@@ -150,17 +150,3 @@ Open the downloaded PNG (macOS: `open gapfill.png`; Windows in WSL:
 If the metric fell and the graphs look sensible, the whole chain works:
 accounts, client, controller, GPU VM, PACE read, training, evaluation, and the
 bucket sync.
-
---------------------------------------------------------------------------------
-
-## 5. What you just proved, and where to go next
-
-You confirmed a new machine can drive the full pipeline: submit to the shared
-controller, provision a GPU, read PACE in-region, train, evaluate on held-out
-data, and land outputs in your bucket. From here, `USAGE.md` covers real runs:
-larger regions and date ranges, bigger GPUs, monitoring, and resuming a run that
-died.
-
-Everything is cheap and self-cleaning: managed jobs tear the VM down on
-completion (or after 30 idle minutes), so nothing keeps running after a smoke
-test.
