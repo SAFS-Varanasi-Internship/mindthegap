@@ -334,10 +334,18 @@ class DataOptions:
     product_id: Optional[str] = None
     lat_bounds: Optional[tuple] = None
     lon_bounds: Optional[tuple] = None
+    # target: Optional[str] = None
+    # target_name: Optional[str] = None
+    # target_units: Optional[str] = None
+    # target_variable: Optional[str] = None
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
     target: Optional[str] = None
+    targets: list = field(default_factory=list)
     target_name: Optional[str] = None
     target_units: Optional[str] = None
     target_variable: Optional[str] = None
+    target_variables: list = field(default_factory=list)
+    
     missing_flag: Optional[str] = None
     land_flag: Optional[str] = None
     features: list = field(default_factory=list)
@@ -355,8 +363,14 @@ class DataOptions:
     input_names: list = field(default_factory=list)
     transforms: dict = field(default_factory=dict)
     standardization: dict = field(default_factory=dict)
+    # target_mean: Optional[float] = None
+    # target_std: Optional[float] = None
+    """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
     target_mean: Optional[float] = None
     target_std: Optional[float] = None
+    target_means: dict = field(default_factory=dict)
+    target_stds: dict = field(default_factory=dict)
+    
     missing_value_handling: Optional[str] = None
     time_bounds: Optional[str] = None
     training_period: Optional[str] = None
@@ -367,9 +381,27 @@ class DataOptions:
     def __post_init__(self):
         self.lat_bounds = _coerce_bounds(self.lat_bounds, "lat_bounds")
         self.lon_bounds = _coerce_bounds(self.lon_bounds, "lon_bounds")
+        # self.input_names = list(self.input_names)
+        # self.features = list(self.features)
+        # self.std_features = list(self.std_features)
+        """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
         self.input_names = list(self.input_names)
         self.features = list(self.features)
         self.std_features = list(self.std_features)
+        # Keep the singular/plural target fields in sync. The singular fields
+        # are retained so existing callers and saved bundles keep working; the
+        # plural fields are what the multi-target pipeline reads.
+        self.targets = list(self.targets)
+        self.target_variables = list(self.target_variables)
+        if self.targets and self.target is None:
+            self.target = self.targets[0]
+        elif self.target and not self.targets:
+            self.targets = [self.target]
+        if self.target_variables and self.target_variable is None:
+            self.target_variable = self.target_variables[0]
+        elif self.target_variable and not self.target_variables:
+            self.target_variables = [self.target_variable]
+            
         if self.cloud_mode not in CLOUD_MODE_OPTIONS:
             valid = ", ".join(repr(m) for m in CLOUD_MODE_OPTIONS)
             raise ValueError(
@@ -380,7 +412,9 @@ class DataOptions:
 
     def is_resolved(self):
         """Return ``True`` once the pipeline has populated the target/inputs."""
-        return self.target is not None and bool(self.input_names)
+        # return self.target is not None and bool(self.input_names)
+        """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+        return bool(self.targets) and bool(self.input_names)
 
     def apply_dataset(
         self,
@@ -411,16 +445,33 @@ class DataOptions:
         if region_name is not None:
             self.region_name = region_name
 
-        self.target_variable = target_variable
-        self.target_name = target_variable
+        # self.target_variable = target_variable
+        # self.target_name = target_variable
+        # self.missing_flag = missing_flag
+        # self.land_flag = land_flag
+        # self.target_units = (
+        #     target_units
+        #     if target_units is not None
+        #     else ds[target_variable].attrs.get("units", "unknown")
+        # )
+        """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+        targets = (
+            [target_variable]
+            if isinstance(target_variable, str)
+            else list(target_variable)
+        )
+        self.target_variables = targets
+        self.target_variable = targets[0]
+        self.target_name = targets[0]
         self.missing_flag = missing_flag
         self.land_flag = land_flag
         self.target_units = (
             target_units
             if target_units is not None
-            else ds[target_variable].attrs.get("units", "unknown")
+            else ds[targets[0]].attrs.get("units", "unknown")
         )
 
+        
         self.lat_bounds = (
             float(ds["lat"].min()),
             float(ds["lat"].max()),
@@ -603,9 +654,11 @@ class Options:
 
         The user specifies exactly what they want -- ``target``, ``missing_flag``
         and ``land_flag`` are required (no defaults); the remaining preprocessing
-        choices are optional keyword arguments. This reads identity, spatial
-        bounds, and time range directly from ``ds`` (and its ``attrs`` written by
-        :func:`mindthegap.demo_data`).
+        choices are optional keyword arguments.         
+        ``target`` may be a single variable name or a list of names; passing a
+        list trains one model that predicts all of them jointly.
+        This reads identity, spatial bounds, and time range directly from ``ds`` 
+        (and its ``attrs`` written by:func:`mindthegap.demo_data`).
 
         Synthetic-cloud configuration is grouped rather than exposed as one
         argument per parameter. ``cloud_mode`` selects the cloud source and is
@@ -631,16 +684,29 @@ class Options:
         in later by :func:`mindthegap.prepare_model_data`. Returns ``self`` for
         chaining.
         """
-        for name in (target, missing_flag, land_flag):
+        # for name in (target, missing_flag, land_flag):
+        #     if name not in ds:
+        #         raise KeyError(
+        #             f"{name!r} is not a variable in ds; pass variable names "
+        #             "that exist in the dataset"
+        #         )
+
+        # self.data.apply_dataset(
+        #     ds,
+        #     target_variable=target,
+        """ CHANGE TO MAKE IT MULTIVAR OUTPUT """
+        targets = [target] if isinstance(target, str) else list(target)
+        if not targets:
+            raise ValueError("target must name at least one variable")
+        for name in (*targets, missing_flag, land_flag):
             if name not in ds:
                 raise KeyError(
                     f"{name!r} is not a variable in ds; pass variable names "
                     "that exist in the dataset"
                 )
-
         self.data.apply_dataset(
             ds,
-            target_variable=target,
+            target_variable=targets,
             missing_flag=missing_flag,
             land_flag=land_flag,
             source=ds.attrs.get("dataset_name"),
