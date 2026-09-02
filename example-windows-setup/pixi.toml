@@ -2,7 +2,7 @@
 authors = ["Scott Henderson <3924836+scottyhq@users.noreply.github.com>"]
 channels = ["conda-forge"]
 name = "skypilot-accelerator-mindthegap"
-platforms = [{ platform = "linux-64", cuda = "12" }]  # linux-64 only (WSL client + Linux VMs); cuda enables the GPU tensorflow build
+platforms = ["linux-64", "osx-arm64", "osx-64"]  # client (default) env solves on all three; the GPU runtime env is pinned to linux-64 in [feature.runtime]
 version = "0.1.0"
 
 # Two environments on purpose:
@@ -14,6 +14,18 @@ version = "0.1.0"
 
 [dependencies]
 skypilot = ">=0.13.0,<0.14"
+
+# The runtime (GPU science stack: cuda tensorflow etc.) only ever installs on the
+# Linux VM, so pin it to linux-64 and declare the cuda virtual package there. This
+# keeps the cuda tensorflow build resolving on the VM without affecting the macOS
+# client solve. (pixi prints a deprecation warning for [system-requirements], but
+# the feature-scoped form is the working way to scope cuda to just this env; the
+# non-deprecated object form is not accepted on a feature's platforms list.)
+[feature.runtime]
+platforms = ["linux-64"]
+
+[feature.runtime.system-requirements]
+cuda = "12"
 
 [feature.runtime.dependencies]
 icechunk = ">=2.1.2,<3"
