@@ -1,48 +1,65 @@
 # macOS setup for the PACE gap-fill smoke test
 
-The pixi client environment in this repo is `linux-64` only, so on a Mac you set
-up the SkyPilot client and the Hugging Face CLI directly with pip instead of
-pixi. Nothing about the training changes: it still runs on a Linux GPU VM in the
-cloud, which builds its own environment. You are only replacing the local
-`pixi run ...` wrappers with the raw `sky ...` and `hf ...` commands they call.
+A start-to-finish smoke test for a Mac: set up the tools and accounts, run a
+short training job on a GPU in the cloud, and confirm it learned by looking at
+the gap-fill evaluation it writes to your bucket. It is deliberately small (about
+10 to 15 minutes and a few cents); the point is to prove the whole chain works,
+not to train a good model.
 
-Read [SMOKE_TEST.md](SMOKE_TEST.md) first for the accounts, the smoke-test
-config, and what the evaluation means. This file only covers the macOS-specific
-client setup; the meaning of each step is the same.
+The pixi environment in this repo is `linux-64` only, so on a Mac you set up the
+SkyPilot client and the Hugging Face CLI directly with pip instead of pixi.
+Nothing about the training changes: it still runs on a Linux GPU VM in the cloud,
+which builds its own environment. You are only replacing the local `pixi run ...`
+wrappers with the raw `sky ...` and `hf ...` commands they call.
 
 **Validation note.** This exact command flow (install, login, `sky check`,
 `sky jobs queue`, `hf buckets ls` and `cp`) was tested on Linux, where `sky` and
 `hf` are the same CLIs as on macOS, and it worked. The macOS-specific pieces
-(installing Python, `open` to view a file) are standard. A run on an actual Mac
-has not been done yet, so treat the first one as a shakedown and tell Troy if
+(installing Python, `open` to view a file) are standard, but a run on an actual
+Mac has not been done yet, so treat the first one as a shakedown and say so if
 anything differs.
 
 --------------------------------------------------------------------------------
 
-## 1. Prerequisites
+## 1. Prerequisites (do these once)
 
-Same accounts as SMOKE_TEST.md: Hugging Face (an access token plus a bucket),
-NASA Earthdata, and a SkyPilot controller login from Scott. On the Mac you also
-need:
+### Accounts
 
-- **Python 3**: macOS ships one; check with `python3 --version`. If missing,
-  `brew install python`.
+- **Hugging Face**: create an account at https://huggingface.co, then make an
+  access token with write permission (Settings, Access Tokens). You also need a
+  bucket to hold outputs. You can create one in the browser, or later from the
+  `hf` venv in step 5 with `hf buckets create <name>`. Either way you end up with
+  a bucket path like `hf://buckets/<user>/<name>`.
+- **NASA Earthdata**: create an account at https://urs.earthdata.nasa.gov. This
+  is what lets the training VM read PACE data.
+- **SkyPilot controller (eScience CloudBank)**: ask Scott for a login to the
+  shared controller. That login is what gives you cloud compute; you do not need
+  your own AWS account, and the controller already has the AWS quota. You will
+  get an endpoint, a username, and a password.
+
+### Tools
+
+- **Python 3**: macOS ships one; check with `python3 --version`. If it is
+  missing, `brew install python`.
 - **git**: `git --version` will offer to install the command line tools if it is
   not already there.
 
-Clone the repo and enter the example folder:
+### Clone the repo and fill in credentials
 
 ```
 git clone https://github.com/SAFS-Varanasi-Internship/mindthegap.git
 cd mindthegap/example-windows-setup
-```
-
-Copy the credentials template and fill it in (same fields as SMOKE_TEST.md:
-`HF_TOKEN`, `HF_BUCKET`, `SKYPILOT_API_*`, `EARTHDATA_*`):
-
-```
 cp .env.example .env
 ```
+
+Edit `.env` and set:
+
+- `HF_TOKEN`: your Hugging Face write token.
+- `HF_BUCKET`: your bucket path, e.g. `hf://buckets/<user>/<name>`, no trailing slash.
+- `SKYPILOT_API_ENDPOINT`, `SKYPILOT_API_USER`, `SKYPILOT_API_PASSWORD`: from Scott.
+- `EARTHDATA_USERNAME`, `EARTHDATA_PASSWORD`: your Earthdata login.
+
+`.env` is gitignored; never commit it.
 
 --------------------------------------------------------------------------------
 
@@ -86,7 +103,7 @@ sky api login -e "https://$SKYPILOT_API_USER:$SKYPILOT_API_PASSWORD@$SKYPILOT_AP
 sky check
 ```
 
-Prove access and quota with a trivial job (this is what `pixi run test` does):
+Prove access and quota with a trivial job:
 
 ```
 sky jobs launch -n demo-test --cpus 1+ -y -- echo hello
@@ -101,33 +118,53 @@ When it reports SUCCEEDED, your access works.
 Edit `recipes/train.py` and set a small, fast config near the top:
 
 ```python
-REGION = "arabian sea"
-TIME_SLICE = slice("2024-06-01", "2024-07-01")
-EPOCHS = 3
+REGION = "arabian sea"                          # small region
+TIME_SLICE = slice("2024-06-01", "2024-07-01")  # one month, quick
+EPOCHS = 3                                       # a few epochs, enough to see it learn
 ```
 
-Launch it (this is what `pixi run remote-train -y` does):
+Launch it:
 
 ```
 sky jobs launch recipes/train.yaml --env-file .env -y
 ```
 
+This starts a managed GPU job that logs in to Earthdata, loads that month of PACE
+chlorophyll, trains the U-Net for a few epochs, and after each epoch syncs the
+checkpoint, the model bundle, and full-region gap-fill graphs to your bucket
+under `outputs/`. It tears the VM down when done. Expect roughly 10 to 15
+minutes, most of which is environment setup on the VM.
+
 Monitor it:
 
 ```
-sky jobs queue -a
-sky jobs logs <job-id>
+sky jobs queue -a          # find the job id and status
+sky jobs logs <job-id>     # read the epoch-by-epoch metrics
 ```
 
-Watch `val_fakecloud_mse` fall in the log; see SMOKE_TEST.md section 4 for what
-that number means. If the job sits in `PENDING`, set `use_spot: false` in
-`recipes/train.yaml` and relaunch.
+If the job sits in `PENDING` waiting for a spot GPU, open `recipes/train.yaml`,
+set `use_spot: false` (on-demand), and relaunch.
 
 --------------------------------------------------------------------------------
 
-## 5. Get the outputs (hf venv)
+## 5. Evaluate the result
 
-The `sky` venv cannot run `hf` cleanly, so switch venvs:
+The training run evaluates itself, so there is no separate evaluation job. Two
+things to look at.
+
+**The held-out metric, in the job log.** Training reports `val_fakecloud_mse` and
+`val_fakecloud_mae` each epoch. These are measured only under synthetic clouds
+(pixels hidden from the model at training time), so they are a real gap-fill
+skill number, not just reconstruction of what the model already saw. They should
+fall over the few epochs. You already saw them with `sky jobs logs <job-id>` in
+step 4.
+
+**The gap-fill graphs, in your bucket.** The run writes `gapfill_<date>.png` files
+that put the observed field next to the model's full-region gap-filled field. For
+a smoke test, "the two panels broadly resemble each other and the fill is smooth"
+is a pass; do not expect a polished model from three epochs.
+
+Get them with the `hf` venv (the `sky` venv cannot run `hf` cleanly, so switch):
 
 ```
 deactivate
@@ -138,22 +175,26 @@ hf buckets cp hf://buckets/<user>/<name>/outputs/gapfill_2024-06-15.png ./gapfil
 open gapfill.png
 ```
 
-If you would rather not use the CLI, you can also browse the bucket and its
-`gapfill_<date>.png` graphs in a web browser on https://huggingface.co under your
-account.
+You can also browse the bucket and its `gapfill_<date>.png` graphs in a web
+browser on https://huggingface.co under your account.
+
+If the metric fell and the graphs look sensible, the whole chain works: accounts,
+client, controller, GPU VM, PACE read, training, evaluation, and the bucket sync.
+Everything is self-cleaning: managed jobs tear the VM down on completion (or after
+30 idle minutes), so nothing keeps running after the test.
 
 --------------------------------------------------------------------------------
 
 ## Command-to-task reference
 
-Each raw command above is the body of a pixi task in `pixi.toml`, so the two
-paths run the same underlying commands:
+Each raw command above is the body of a pixi task in `pixi.toml`, so the macOS
+path and the Linux/Windows path run the same underlying commands:
 
-| pixi task (Linux/Windows)         | raw command (macOS)                                      |
-|-----------------------------------|----------------------------------------------------------|
-| `pixi run login`                  | `sky api login -e "https://.../"`                        |
-| `pixi run check`                  | `sky check`                                              |
-| `pixi run test`                   | `sky jobs launch -n demo-test --cpus 1+ -- echo hello`   |
-| `pixi run remote-train`           | `sky jobs launch recipes/train.yaml --env-file .env`     |
-| `pixi run sky jobs queue -a`      | `sky jobs queue -a`                                      |
-| `pixi run -e runtime hf buckets ...` | `hf buckets ...` (in the hf venv)                     |
+| pixi task (Linux/Windows)            | raw command (macOS)                                    |
+|--------------------------------------|--------------------------------------------------------|
+| `pixi run login`                     | `sky api login -e "https://.../"`                      |
+| `pixi run check`                     | `sky check`                                            |
+| `pixi run test`                      | `sky jobs launch -n demo-test --cpus 1+ -- echo hello` |
+| `pixi run remote-train`              | `sky jobs launch recipes/train.yaml --env-file .env`   |
+| `pixi run sky jobs queue -a`         | `sky jobs queue -a`                                    |
+| `pixi run -e runtime hf buckets ...` | `hf buckets ...` (in the hf venv)                      |
