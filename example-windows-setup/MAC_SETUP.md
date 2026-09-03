@@ -40,8 +40,8 @@ cd mindthegap/example-windows-setup
 cp .env.example .env
 ```
 
-Edit `.env` and set:
-
+Edit `.env` and set (do not put quotations around any of these values):
+- `SKYPILOT_API_ENDPOINT`: cloudbank-skypilot.westus2.cloudapp.azure.com. no https:
 - `HF_TOKEN`: your Hugging Face write token.
 - `HF_BUCKET`: your bucket path, e.g. `hf://buckets/<user>/<name>`, no trailing slash.
 - `SKYPILOT_API_ENDPOINT`, `SKYPILOT_API_USER`, `SKYPILOT_API_PASSWORD`: from Scott.
@@ -132,6 +132,8 @@ sky jobs logs <job-id>     # read the epoch-by-epoch metrics
 
 If the job sits in `PENDING` waiting for a spot GPU, open `recipes/train.yaml`,
 set `use_spot: false` (on-demand), and relaunch.
+
+Watch jobs here: https://cloudbank-skypilot.westus2.cloudapp.azure.com/dashboard/jobs
 
 --------------------------------------------------------------------------------
 
